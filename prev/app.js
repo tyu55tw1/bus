@@ -2,7 +2,7 @@
 // 程式放 GitHub Pages（公開）；TDX 金鑰和常用資料只存在這支手機的 localStorage。
 // TDX 的資料 API 對瀏覽器預檢（OPTIONS）回 401、沒有 CORS 標頭，網頁不能自己查 → 由安卓外殼 BusBridge 代查（見 設計.md）。
 "use strict";
-const VERSION = "手機版 0.1";
+const VERSION = "手機版 0.2";
 const KEY = "busphone.v1";   // 同一個網域還有行事曆（calphone.v1）、之後的生活助手，名字別撞
 const IS_BETA = location.pathname.includes("/beta/");
 const KIND = {tra: "台鐵", thsr: "高鐵", metro: "捷運", bus: ""};   // 電腦版 favs 的 kind
@@ -57,16 +57,76 @@ window.onTdx = function (id, text, err) {
   try { w.ok(JSON.parse(text)); } catch (e) { w.bad(new Error("資料格式不對")); }
 };
 
+// ════════════ 常用的即時到站（照電腦版 busapi.api_fav：同一個縣市一次查完，省 TDX 額度） ════════════
+const ETA_STATUS = {1: "尚未發車", 2: "交管不停靠", 3: "末班車已過", 4: "今日未營運"};
+const busPath = (kind, city) => city === "InterCity" ? `v2/Bus/${kind}/InterCity` : `v2/Bus/${kind}/City/${city}`;
+const LIVE = {t: null, err: "", busy: false, eta: {}};   // eta：「站牌|路線」→ TDX 到站原始資料
+
+// 一筆公車到站 → {m 分鐘或 null, s 狀態 now/soon/""/off, t 文字}（電腦版 _eta＋eta_text）
+function etaOf(e) {
+  if (!e) return {m: null, s: "off", t: "暫無到站資料"};
+  const sec = e.EstimateTime, stat = e.StopStatus ?? 0;
+  if (sec != null && !stat) {
+    const m = Math.floor(sec / 60);
+    return {m, s: sec < 60 ? "now" : m <= 3 ? "soon" : "", t: sec < 60 ? "進站中" : `${m} 分`};
+  }
+  const nb = String(e.NextBusTime || "").slice(11, 16);
+  return {m: null, s: "off", t: nb ? `${ETA_STATUS[stat] || ""} 下一班約 ${nb}`.trim() : ETA_STATUS[stat] || "沒有即時資料"};
+}
+
+// 同一站同一條路線有時有好幾筆（不同班次／業者）：有預估時間的優先、最快到的優先；先比子路線，再比方向
+function favEta(f) {
+  const c = (LIVE.eta[f.stop + "|" + f.route] || []).slice()
+    .sort((a, b) => (a.EstimateTime == null) - (b.EstimateTime == null) || (a.EstimateTime || 0) - (b.EstimateTime || 0));
+  return etaOf(c.find(x => x.SubRouteUID === f.sub) || c.find(x => (x.Direction ?? 0) === (f.dir ?? 0)));
+}
+
+async function refreshLive() {
+  const favs = DB.data.favs.filter(f => f.t === "bus" && f.city && f.stop);
+  if (!favs.length || LIVE.busy || !window.BusBridge || !DB.settings.tdxId) return;
+  LIVE.busy = true;
+  const byCity = {};
+  favs.forEach(f => (byCity[f.city] = byCity[f.city] || new Set()).add(f.stop));
+  const eta = {}, errs = [];
+  for (const [city, uids] of Object.entries(byCity)) {
+    const flt = [...uids].sort().map(u => `StopUID eq '${u}'`).join(" or ");
+    try {
+      for (const e of await tdx(`${busPath("EstimatedTimeOfArrival", city)}?$filter=${flt}&$format=JSON`)) {
+        const k = e.StopUID + "|" + (e.RouteName?.Zh_tw ?? "");
+        (eta[k] = eta[k] || []).push(e);
+      }
+    } catch (e) { errs.push(e.message); }
+  }
+  LIVE.busy = false;
+  if (errs.length && !Object.keys(eta).length) LIVE.err = errs[0];   // 全部失敗就保留上一次的資料
+  else { LIVE.eta = eta; LIVE.err = errs[0] || ""; LIVE.t = new Date(); }
+  renderFav();
+}
+
 // ════════════ 畫面 ════════════
+function favRow(f) {
+  if (f.t !== "bus") {
+    return `<div class="row"><span>${esc(f.label || f.name)}</span><span class="d">${esc(KIND[f.kind] ?? "")}</span></div>`;
+  }
+  const e = LIVE.t ? favEta(f) : {s: "off", t: "…"};
+  return `<div class="row"><span class="eta ${e.s}">${esc(e.t)}</span><span><b>${esc(f.route)}</b> ${esc(f.name)}` +
+    (f.to ? `<br><span class="sub">往 ${esc(f.to)}</span>` : "") + `</span></div>`;
+}
+
 function renderFav() {
   const D = DB.data;
   let h = "";
   if (!D.favs.length) {
     h += `<div class="card hint"><h3>還沒有常用</h3><p class="muted">到 ⚙️ 設定按「從電腦版搬過來」，把電腦版的常用站牌、家／公司複製到手機。</p></div>`;
   } else {
-    h += `<div class="card"><h3>⭐ 常用</h3>` + D.favs.map(f =>
-      `<div class="row"><span>${esc(f.label || f.name)}</span><span class="d">${esc(KIND[f.kind] ?? f.kind ?? "")}</span></div>`).join("") +
-      `<p class="muted small-t">到站時間下一步（第 2 步）才會做。</p></div>`;
+    let note = "";
+    if (!window.BusBridge) note = "要在公車 App 裡才查得到到站時間。";
+    else if (!DB.settings.tdxId) note = "先到 ⚙️ 設定輸入 TDX 金鑰，才查得到到站時間。";
+    else if (LIVE.err) note = "查不到：" + LIVE.err;
+    const at = LIVE.t ? LIVE.t.toLocaleTimeString("zh-TW", {hour12: false}) + " 更新・每 30 秒自動更新" : "";
+    h += `<div class="card"><h3>⭐ 常用</h3>` + D.favs.map(favRow).join("") +
+      `<p class="muted small-t">${esc(note || at)}${note && at ? "（" + esc(at) + "）" : ""}</p>` +
+      `<p class="muted small-t">火車時刻之後幾步（第 3 步）才會做。</p></div>`;
   }
   const pl = [["🏠 家", D.home], ["🏢 公司", D.work]].filter(([, p]) => p && p.name);
   if (pl.length) h += `<div class="card"><h3>📍 地點</h3>` + pl.map(([n, p]) => `<div class="row"><span>${n}</span><span class="d">${esc(p.name)}</span></div>`).join("") + `</div>`;
@@ -114,6 +174,7 @@ window.onImport = function (text, err) {
     DB = fix(DB);
     save();
     render();
+    refreshLive();
     toast(`搬好了：常用 ${DB.data.favs.length} 個`);
   } catch (e) {
     toast("搬不過來：" + e.message, 5000);
@@ -134,6 +195,7 @@ document.addEventListener("click", async ev => {
     DB.settings.tdxId = $("#tdx-id").value.trim();
     DB.settings.tdxSecret = $("#tdx-sec").value.trim();
     save();
+    refreshLive();
     return toast("存好了");
   }
   if (act === "testkey") {
@@ -158,4 +220,8 @@ document.addEventListener("click", async ev => {
 document.body.dataset.tab = "fav";
 $("#beta").hidden = !IS_BETA;
 render();
+refreshLive();
+// 每 30 秒自動更新（跟電腦版一樣）；App 在背景或不在常用頁就不查，省 TDX 額度
+setInterval(() => { if (!document.hidden && document.body.dataset.tab === "fav") refreshLive(); }, 30000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshLive(); });
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});

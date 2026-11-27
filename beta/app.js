@@ -2,7 +2,7 @@
 // 程式放 GitHub Pages（公開）；TDX 金鑰和常用資料只存在這支手機的 localStorage。
 // TDX 的資料 API 對瀏覽器預檢（OPTIONS）回 401、沒有 CORS 標頭，網頁不能自己查 → 由安卓外殼 BusBridge 代查（見 設計.md）。
 "use strict";
-const VERSION = "手機版 0.2";
+const VERSION = "手機版 0.3";
 const KEY = "busphone.v1";   // 同一個網域還有行事曆（calphone.v1）、之後的生活助手，名字別撞
 const IS_BETA = location.pathname.includes("/beta/");
 const KIND = {tra: "台鐵", thsr: "高鐵", metro: "捷運", bus: ""};   // 電腦版 favs 的 kind
@@ -103,6 +103,75 @@ async function refreshLive() {
   renderFav();
 }
 
+// ════════════ 附近（手機定位 → 300 公尺內的站牌 → 每站經過的公車幾分到；照電腦版 nearby_stops＋nearby_board） ════════════
+const NEAR = {busy: false, err: "", groups: null, t: null};
+
+function here() {
+  return new Promise((ok, bad) => {
+    if (!navigator.geolocation) return bad(new Error("這支手機不能定位"));
+    navigator.geolocation.getCurrentPosition(p => ok(p.coords), e => bad(new Error(e.code === 1 ? "沒有允許定位（到手機設定開公車 App 的位置權限）" : "定位不到，等一下再試")),
+      {enableHighAccuracy: true, timeout: 15000, maximumAge: 30000});
+  });
+}
+
+function meters(a, b, c, d) {   // 兩點距離（公尺）
+  const R = 6371000, r = Math.PI / 180;
+  const x = Math.sin((c - a) * r / 2) ** 2 + Math.cos(a * r) * Math.cos(c * r) * Math.sin((d - b) * r / 2) ** 2;
+  return Math.round(2 * R * Math.asin(Math.sqrt(x)));
+}
+
+async function findNear() {
+  if (NEAR.busy) return;
+  NEAR.busy = true; NEAR.err = ""; renderNear();
+  try {
+    const p = await here();
+    const lat = p.latitude.toFixed(5), lon = p.longitude.toFixed(5);
+    const stops = (await tdx(`advanced/v2/Bus/Stop/NearBy?$spatialFilter=nearby(${lat}, ${lon}, 300)&$select=StopUID,StopName,StopPosition,City&$format=JSON`))
+      .map(s => ({uid: s.StopUID, name: s.StopName?.Zh_tw ?? "", city: s.City,
+        m: meters(+lat, +lon, s.StopPosition?.PositionLat ?? +lat, s.StopPosition?.PositionLon ?? +lon)}))
+      .filter(s => s.uid && s.city).sort((a, b) => a.m - b.m).slice(0, 24);
+    const byCity = {};
+    stops.forEach(s => (byCity[s.city] = byCity[s.city] || []).push(s.uid));
+    const eta = {};
+    for (const [city, uids] of Object.entries(byCity)) {
+      for (const e of await tdx(`${busPath("EstimatedTimeOfArrival", city)}?$filter=${uids.map(u => `StopUID eq '${u}'`).join(" or ")}&$format=JSON`))
+        (eta[e.StopUID] = eta[e.StopUID] || []).push(e);
+    }
+    // 同名、距離差不多的站牌（對向、不同業者）併成一組；每組裡同一條路線同一個方向只留最快的
+    const groups = [];
+    for (const s of stops) {
+      let g = groups.find(x => x.name === s.name && Math.abs(x.m - s.m) < 150);
+      if (!g) groups.push(g = {name: s.name, m: s.m, buses: {}});
+      for (const e of eta[s.uid] || []) {
+        const k = (e.RouteName?.Zh_tw ?? "") + "|" + (e.Direction ?? 0);
+        const v = etaOf(e);
+        const old = g.buses[k];
+        if (!old || (v.m != null && (old.m == null || v.m < old.m))) g.buses[k] = {...v, route: e.RouteName?.Zh_tw ?? ""};
+      }
+    }
+    NEAR.groups = groups.filter(g => Object.keys(g.buses).length).slice(0, 8);
+    NEAR.t = new Date();
+  } catch (e) {
+    NEAR.err = e.message;
+  }
+  NEAR.busy = false;
+  renderNear();
+}
+
+function renderNear() {
+  let h = `<div class="card"><h3>📍 附近站牌</h3><p class="muted">用手機定位找 300 公尺內的站牌和經過的公車。</p>` +
+    `<button class="primary" data-act="near" ${NEAR.busy ? "disabled" : ""}>${NEAR.busy ? "查詢中…" : NEAR.groups ? "🔄 重新整理" : "📍 找附近站牌"}</button>` +
+    (NEAR.err ? `<p class="muted">查不到：${esc(NEAR.err)}</p>` : "") +
+    (NEAR.t ? `<p class="muted small-t">${NEAR.t.toLocaleTimeString("zh-TW", {hour12: false})} 更新</p>` : "") + `</div>`;
+  if (NEAR.groups && !NEAR.groups.length) h += `<div class="card"><p class="muted">300 公尺內沒有找到有公車資料的站牌。</p></div>`;
+  for (const g of NEAR.groups || []) {
+    const bs = Object.values(g.buses).sort((a, b) => (a.m == null) - (b.m == null) || (a.m ?? 0) - (b.m ?? 0) || a.route.localeCompare(b.route, "zh-Hant"));
+    h += `<div class="card"><h3>🚏 ${esc(g.name)} <span class="sub">約 ${g.m} 公尺</span></h3>` +
+      bs.map(b => `<div class="row"><span class="eta ${b.s}">${esc(b.t)}</span><span><b>${esc(b.route)}</b></span></div>`).join("") + `</div>`;
+  }
+  $("#pane-near").innerHTML = h;
+}
+
 // ════════════ 畫面 ════════════
 function favRow(f) {
   if (f.t !== "bus") {
@@ -157,6 +226,7 @@ function renderSet() {
 
 function render() {
   renderFav();
+  renderNear();
   renderSet();
 }
 
@@ -207,6 +277,7 @@ document.addEventListener("click", async ev => {
     }
     return;
   }
+  if (act === "near") return findNear();
   if (act === "import") { toast("搬資料中…"); return window.BusBridge.importOld(); }
   if (act === "wipe") {
     if (!b.dataset.sure) { b.dataset.sure = "1"; b.textContent = "再按一次就清掉"; return; }
