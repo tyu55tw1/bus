@@ -140,91 +140,158 @@ async function plans(o, d, when) {   // when：幾點出發（Date，不給＝�
   return pickPlans(ok.length ? ok : rs);
 }
 
+// ── 規劃（1.5 照電腦版 openTrip：結果是推進頁 #trip-res，上面可以換起點）──
 async function tripGo(dest) {
-  TRIP.dest = dest; TRIP.cands = null; TRIP.res = null; TRIP.err = ""; TRIP.busy = "規劃中…"; renderTrip();
+  TRIP.dest = dest; TRIP.cands = null; TRIP.res = null; TRIP.err = ""; TRIP.busy = "規劃中…";
+  if (!$("#trip-res")) UI.push(`<header class="top"><button class="back">${icon("back")}返回</button><h1 class="center">${esc(String(dest.name).slice(0, 12))}</h1>` +
+    `<button class="textbtn press" data-act="tsave" id="tp-star" aria-label="存成常去地點" style="width:60px">☆</button></header>` +
+    `<div class="scroll"><div id="trip-res"></div></div>`, {onPop: () => { TRIP.dest = null; TRIP.res = null; TRIP.busy = false; renderTrip(); }});
+  renderTrip();
   try {
     const o = await tripOrigin(), d = dest, straight = meters(o.lat, o.lon, d.lat, d.lon);
-    const res = {o, d, straight, walk: {min: Math.max(1, Math.round(straight * 1.25 / WALK_M_MIN)), m: Math.round(straight * 1.25)}, plans: [], perr: ""};
+    const res = {o, d, straight, walk: {min: Math.max(1, Math.round(straight * 1.25 / WALK_M_MIN)), m: Math.round(straight * 1.25)}, plans: [], perr: "",
+      time: new Date().toTimeString().slice(0, 5)};
     if (straight >= 60) {
       res.taxi = taxi(o, d);
       if (straight > NO_TRANSIT && !window.BusBridge?.ver) { res.plans = null; res.perr = "要先更新公車 App 到 1.3 版（我的助手「📱 主畫面小工具」下載）"; }
       else if (straight > NO_TRANSIT) { try { res.plans = await plans(o, d); } catch (e) { res.plans = null; res.perr = e.message; } }
       else res.skipped = true;
     } else res.same = true;
+    if (TRIP.dest !== dest) return;   // 等的時候按了返回或換了地點
     TRIP.res = res;
-  } catch (e) { TRIP.err = e.message; }
+  } catch (e) { if (TRIP.dest === dest) TRIP.err = e.message; }
   TRIP.busy = false; renderTrip();
+}
+// 換起點：在結果頁就重新規劃
+function tripFrom(k) {
+  const q = $("#tp-q"); if (q) TRIP.q = q.value;
+  TRIP.from = k;
+  if (TRIP.dest && $("#trip-res")) return tripGo(TRIP.dest);
+  renderTrip();
 }
 
 async function tripSearch() {
   const q = ($("#tp-q")?.value || "").trim();
   TRIP.q = q;
-  if (!q) return;
-  TRIP.busy = "找地點中…"; TRIP.err = ""; TRIP.res = null; TRIP.cands = null; renderTrip();
+  if (!q) { TRIP.cands = null; TRIP.err = ""; return renderTrip(); }
+  $("#tp-q")?.blur();
+  TRIP.busy = "搜尋中…"; TRIP.err = ""; TRIP.cands = null; renderTrip();
   let ll = null;
-  try { const o = await tripOrigin(); ll = [o.lat, o.lon]; } catch (e) { /* 沒定位就找全台 */ }
+  try { const o = await tripOrigin(); ll = [o.lat, o.lon]; TRIP.oname = o.name; } catch (e) { TRIP.oname = ""; /* 沒定位就找全台 */ }
   TRIP.cands = await findPlaces(q, ll);
-  if (!TRIP.cands.length) TRIP.err = `找不到「${q}」，換個說法（例如加上縣市）`;
+  if (!TRIP.cands.length) TRIP.err = `找不到「${q}」，換個說法試試（加上縣市或路名，例如「台南 家樂福」），或直接打「緯度,經度」。`;
   TRIP.busy = false; renderTrip();
 }
 
 function savePlace() {
-  const d = TRIP.dest, P = DB.data.places = Array.isArray(DB.data.places) ? DB.data.places : [];
+  const d = TRIP.dest; if (!d) return;
+  const P = DB.data.places = Array.isArray(DB.data.places) ? DB.data.places : [];
   const i = P.findIndex(p => p.name === d.name && meters(+p.lat, +p.lon, d.lat, d.lon) < 80);
-  if (i >= 0) P.splice(i, 1); else P.push({name: d.name, lat: d.lat, lon: d.lon, q: TRIP.q || d.name});
+  if (i >= 0) P.splice(i, 1); else P.push({name: d.name, addr: d.addr || "", lat: d.lat, lon: d.lon, q: TRIP.q || d.name});
   save(); renderTrip();
   toast(i >= 0 ? `拿掉常去：${d.name}` : `存成常去：${d.name}`);
 }
 
+// 每一段（電腦版 legHtml：左邊時間、右邊怎麼搭）
 function legHtml(l) {
-  if (l.kind === "wait") return `<div class="leg walk">⏳ 等 ${l.min} 分</div>`;
-  if (l.kind === "walk") return `<div class="leg walk">🚶 走 ${l.min || 1} 分${l.m ? `（${l.m} 公尺）` : ""}${l.to ? ` 到 ${esc(l.to)}` : ""}</div>`;
-  return `<div class="leg"><b>${l.emoji} ${esc(l.line && !l.line.includes(l.label) ? l.label + " " + l.line : l.line || l.label)}</b>` +
-    (l.head ? ` <span class="sub">往 ${esc(l.head)}</span>` : "") + (l.label === "客運" && l.agency ? ` <span class="sub">${esc(l.agency)}</span>` : "") +
-    `<br><span class="sub">${hm(l.start)} ${esc(l.from)} 上車 → ${hm(l.end)} ${esc(l.to)} 下車（${l.min} 分）</span></div>`;
+  const tm = l.start && l.end ? `${hm(l.start)}–${hm(l.end)}` : "";
+  if (l.kind === "walk" || l.kind === "wait") {
+    if (!l.min && !tm) return "";
+    return `<div class="leg mute"><div class="lt">${tm}</div><div class="lb">${l.emoji} ${l.label} ${l.min || 1} 分${l.kind === "walk" && l.m ? `（約 ${l.m} 公尺）` : ""}${l.kind === "walk" && l.to ? ` → ${esc(l.to)}` : ""}</div></div>`;
+  }
+  return `<div class="leg"><div class="lt">${tm || (l.min ? `約 ${l.min} 分` : "")}</div><div class="lb"><b>${l.emoji} ${esc(l.line && !l.line.includes(l.label) ? l.label + " " + l.line : l.line || l.label)}</b>` +
+    `<span>${esc(l.from)} → ${esc(l.to)}${l.head && l.head !== l.line ? `・往 ${esc(l.head)}` : ""}${l.label === "客運" && l.agency ? `・${esc(l.agency)}` : ""}</span></div></div>`;
+}
+const kmTxt = m => m >= 1000 ? `${(m / 1000).toFixed(1)} 公里` : `${Math.round(m)} 公尺`;
+
+function tripFromHtml() {
+  const D = DB.data, k = TRIP.from;
+  const froms = [["here", "📍 目前位置"], ["home", "🏠 家"], ["work", "🏢 公司"]].filter(([v]) => v === "here" || D[v]?.lat);
+  return `<div class="fromrow"><span class="lab">從</span><div class="chips scrollx">` +
+    froms.map(([v, t]) => `<button class="chip press" aria-pressed="${k === v}" data-act="tfrom" data-k="${v}">${t}</button>`).join("") + `</div></div>`;
+}
+
+// 想去哪（電腦版 openWhere）：搜尋框、問 AI、起點、回家／去公司、常去地點或候選地點
+function renderWhere(box) {
+  const D = DB.data, P = Array.isArray(D.places) ? D.places : [];
+  let h = `<form class="field where-in" id="tp-f">${icon("search")}<input type="search" id="tp-q" enterkeyhint="search" placeholder="地名、店名或地址，例如：家樂福" aria-label="想去哪" autocomplete="off" value="${esc(TRIP.q)}">` +
+    `<button class="textbtn" type="submit">搜尋</button></form>` +
+    `<button class="textbtn askline press" data-act="aiopen">💬 也可以打一句話問 AI，例如「回程最晚幾點？」</button>` + tripFromHtml();
+  if (TRIP.busy && !TRIP.dest) h += `<div class="cap"><span class="spin"></span>${TRIP.busy}</div>`;
+  else if (TRIP.err && !TRIP.dest) h += `<div class="note">${esc(TRIP.err)}</div>`;
+  else if (TRIP.cands?.length) {
+    h += `<div class="label"><span>${TRIP.cands.length} 個地點${TRIP.oname ? `・離${esc(TRIP.oname)}近的在前面` : ""}</span></div><div class="cardlist">` +
+      TRIP.cands.map((p, i) => `<button class="rowlink place press" data-act="tpick" data-i="${i}"><span class="w"><b>${esc(p.name)}</b><span>${esc(p.addr || "")}</span></span>` +
+        `<span class="d">${p.dist != null ? kmTxt(p.dist) : ""}</span></button>`).join("") +
+      `</div><div class="cap">地點資料：OpenStreetMap。找不到的店家可以改打地址。</div>`;
+  } else {
+    const quick = [["home", "🏠 回家"], ["work", "🏢 去公司"]].filter(([k]) => D[k]?.lat && TRIP.from !== k);
+    if (quick.length) h += `<div class="tiles two" style="margin-top:12px">${quick.map(([k, t]) => `<button class="tile press" data-act="tquick" data-k="${k}">${t}</button>`).join("")}</div>`;
+    h += P.length ? `<div class="label"><span>常去地點</span></div><div class="cardlist">` +
+      P.map((p, i) => `<button class="rowlink press" data-act="tplace" data-i="${i}"><span class="w"><b>${esc(p.name)}</b><span>${esc(p.addr || p.q || "")}</span></span><span class="chev">${icon("chev")}</span></button>`).join("") + `</div>` +
+      `<div class="cap" style="text-align:left">在結果頁右上按 ☆ 存成常去地點，再按一次拿掉。只存在這支手機。</div>` :
+      `<div class="cap" style="margin-top:18px">打地名、店名或地址就能規劃怎麼去。<br>結果頁右上按 ☆ 可以存成常去地點，下次點一下就好。</div>`;
+  }
+  box.innerHTML = h;
+  $("#tp-f").onsubmit = e => { e.preventDefault(); tripSearch(); };
+  $("#tp-q").oninput = e => { if (!e.target.value.trim() && TRIP.cands) { TRIP.cands = null; TRIP.err = ""; TRIP.q = ""; renderWhere(box); $("#tp-q").focus(); } };
+}
+
+// 方案卡片（電腦版 tripCard；手機版沒有即時倒數，用規劃的時刻）
+function tripCard(p) {
+  return `<div class="card trip"><div class="tags">${p.tags.map(t => `<span class="tag">${esc(t)}</span>`).join("")}</div>` +
+    `<div class="tm">${hm(p.start)} → ${hm(p.end)} 到</div>` +
+    `<div class="s">${fmtMin(p.min)}・轉乘 ${p.transfers} 次・走路 ${p.walk} 分</div>` +
+    `<div style="font-weight:700">${esc(p.summary)}</div>` +
+    `<details><summary>每一段怎麼走</summary>${p.legs.map(legHtml).join("")}</details></div>`;
+}
+function walkCard(R, main) {
+  return `<div class="card alt${main ? " main" : ""}"><div class="ah"><span class="ai">🚶</span><div><b>${main ? "走路就到" : "走路"}</b><span>約 ${R.walk.min} 分鐘・${kmTxt(R.walk.m)}${main ? "（很近，不用等車）" : ""}</span></div></div>` +
+    `<a class="btn ${main ? "" : "ghost "}sm press" href="${gmaps(R.o, R.d, "walking")}" target="_blank" rel="noopener">${icon("nav")}Google 地圖步行導航</a></div>`;
+}
+function taxiCard(R, main) {
+  const t = R.taxi;
+  return `<div class="card alt${main ? " main" : ""}"><div class="ah"><span class="ai">🚕</span><div><b>計程車 約 ${t.lo}～${t.hi} 元</b><span>估算・約 ${t.min} 分鐘・${t.km} 公里${t.night ? "・夜間" : ""}</span></div></div>` +
+    `<div class="small muted">${esc(t.rule)}${t.guess ? "（這個縣市沒逐一核對）" : ""}。實際以跳表為準，塞車會更貴。</div>` +
+    `<div class="acts"><a class="btn ${main ? "" : "ghost "}sm press" href="tel:55688">📞 台灣大車隊 55688</a>` +
+    `<a class="btn ghost sm press" href="https://m.uber.com/ul/?action=setPickup&pickup[latitude]=${R.o.lat}&pickup[longitude]=${R.o.lon}&dropoff[latitude]=${R.d.lat}&dropoff[longitude]=${R.d.lon}" target="_blank" rel="noopener">Uber App</a></div></div>`;
+}
+function driveCard(R) {
+  return `<div class="card alt"><div class="ah"><span class="ai">🚗</span><div><b>開車</b><span>${R.taxi ? `約 ${R.taxi.min} 分鐘・${R.taxi.km} 公里（估算）` : "Google 地圖導航"}</span></div></div>` +
+    `<div class="acts"><a class="btn ghost sm press" href="${gmaps(R.o, R.d, "driving")}" target="_blank" rel="noopener">${icon("nav")}Google 地圖開車導航</a></div></div>`;
+}
+
+// 行程結果（電腦版 openTrip 的 draw）
+function renderTripRes(box) {
+  const R = TRIP.res, d = TRIP.dest, P = Array.isArray(DB.data.places) ? DB.data.places : [];
+  const star = $("#tp-star");
+  if (star) star.textContent = d && P.some(p => p.name === d.name && meters(+p.lat, +p.lon, d.lat, d.lon) < 80) ? "⭐" : "☆";
+  let h = tripFromHtml();
+  if (R) h += `<div class="tripto">從 <b>${esc(R.o.name)}</b> 到 <b>${esc(R.d.name)}</b>${R.d.addr ? `<br>${esc(R.d.addr)}` : ""}</div>`;
+  else if (d) h += `<div class="tripto">到 <b>${esc(d.name)}</b>${d.addr ? `<br>${esc(d.addr)}` : ""}</div>`;
+  if (TRIP.busy) { box.innerHTML = h + `<div class="skel"></div><div class="skel"></div>`; return; }
+  if (TRIP.err) { box.innerHTML = h + `<div class="note bad">${esc(TRIP.err)}</div><div class="cap" style="text-align:left">點上面的「家」「公司」改用別的起點。</div>`; return; }
+  if (!R) { box.innerHTML = h; return; }
+  if (R.same) { box.innerHTML = h + `<div class="note">你已經在「${esc(R.d.name)}」附近了（不到 60 公尺）。</div>`; return; }
+  const near = R.skipped || R.straight <= WALK_NEAR, noBus = Array.isArray(R.plans) && !R.plans.length && !R.skipped;
+  if (near) h += walkCard(R, true);
+  if (R.plans === null) h += errBox("trip", {message: R.perr || "路線規劃查不到"}, () => tripGo(TRIP.dest));
+  else if (R.plans.length) h += `<div class="label"><span>搭車（${R.plans.length} 種走法）</span><span>${R.time} 規劃</span></div><div class="list">${R.plans.map(tripCard).join("")}</div>`;
+  else if (!R.skipped) {
+    const hr = new Date().getHours(), late = hr >= 21 || hr < 6;
+    h += `<div class="note">這個時間找不到大眾運輸的走法${late ? "（晚上可能已經收班，明天早上再查會有）" : "（目的地附近可能沒有公車、火車站）"}，下面有計程車和其他走法。</div>`;
+  }
+  if (noBus && R.taxi && R.straight <= 80000) h += taxiCard(R, true);
+  const alt = [];
+  if (!near && R.walk.min <= 40) alt.push(walkCard(R, false));
+  if (!noBus && R.taxi && R.straight > WALK_NEAR && R.straight <= 80000) alt.push(taxiCard(R, false));
+  alt.push(driveCard(R));
+  h += `<div class="label"><span>其他走法</span></div><div class="list">${alt.join("")}</div>`;
+  h += `<div class="cap"><a href="${gmaps(R.o, R.d, "transit")}" target="_blank" rel="noopener">在 Google 地圖看大眾運輸 ↗</a><br>資料來源：交通部 TDX、OpenStreetMap</div>`;
+  box.innerHTML = h;
 }
 
 function renderTrip() {
-  const D = DB.data, box = $("#trip-box");
-  if (!box) return;
-  const froms = [["here", "📍 目前位置"], ["home", "🏠 家"], ["work", "🏢 公司"]].filter(([k]) => k === "here" || D[k]?.lat);
-  const P = Array.isArray(D.places) ? D.places : [];
-  let h = `<div class="card trip"><h3>🧭 想去哪？</h3><div class="trow"><input type="text" id="tp-q" placeholder="地名、店名、地址" value="${esc(TRIP.q)}" autocomplete="off">` +
-    `<button class="primary small" data-act="tsearch" ${TRIP.busy ? "disabled" : ""}>找</button></div>`;
-  h += `<div class="chips"><span class="sub">從</span>` + froms.map(([k, n]) => `<button class="small ${TRIP.from === k ? "on" : ""}" data-act="tfrom" data-k="${k}">${n}</button>`).join("") + `</div>`;
-  const quick = [["home", "🏠 回家", D.home], ["work", "🏢 去公司", D.work]].filter(([k, , p]) => p?.lat && TRIP.from !== k)
-    .map(([k, n]) => `<button class="small" data-act="tquick" data-k="${k}">${n}</button>`)
-    .concat(P.map((p, i) => `<button class="small" data-act="tplace" data-i="${i}">📌 ${esc(p.name)}</button>`));
-  if (quick.length) h += `<div class="chips">${quick.join("")}</div>`;
-  if (TRIP.busy) h += `<p class="muted">${TRIP.busy}</p>`;
-  if (TRIP.err) h += `<p class="muted">${esc(TRIP.err)}</p>`;
-  if (TRIP.cands?.length) h += `<div class="cands">` + TRIP.cands.map((p, i) => `<button class="row full" data-act="tpick" data-i="${i}"><span><b>${esc(p.name)}</b>` +
-    `<br><span class="sub">${esc(p.addr)}${p.dist != null ? `・${p.dist >= 1000 ? (p.dist / 1000).toFixed(1) + " 公里" : p.dist + " 公尺"}` : ""}</span></span></button>`).join("") + `</div>`;
-  h += `</div>`;
-  const R = TRIP.res;
-  if (R) {
-    const saved = P.some(p => p.name === R.d.name && meters(+p.lat, +p.lon, R.d.lat, R.d.lon) < 80);
-    h += `<div class="card"><h3>${esc(R.o.name)} → ${esc(R.d.name)}<button class="star dot" data-act="tsave" title="存成常去地點">${saved ? "⭐" : "☆"}</button></h3>`;
-    if (R.same) h += `<p class="muted">你已經在這附近了。</p>`;
-    else {
-      if (R.skipped || R.straight <= WALK_NEAR) h += `<p>🚶 走路約 ${R.walk.min} 分（${R.walk.m} 公尺）・很近，建議走路</p>`;
-      if (R.plans === null) h += `<p class="muted">路線規劃查不到：${esc(R.perr)}</p>`;
-      else if (!R.skipped && !R.plans.length) h += `<p class="muted">這兩個地點之間查不到大眾運輸（目的地附近可能沒有公車、火車站），看下面的計程車。</p>`;
-      (R.plans || []).forEach((p, i) => {   // 第一個方案展開，其他點摘要才展開
-        h += `<div class="plan"><div class="ph"><span class="tag2">${p.tags.join("・")}</span> <b>${hm(p.start)} → ${hm(p.end)}</b>` +
-          ` <span class="sub">${fmtMin(p.min)}・轉 ${p.transfers} 次・走 ${p.walk} 分</span></div>` +
-          `<details ${i ? "" : "open"}><summary class="sub">${esc(p.summary)}</summary>` + p.legs.map(legHtml).join("") + `</details></div>`;
-      });
-      if (!R.skipped && R.straight > WALK_NEAR) h += `<p class="sub">🚶 全程走路約 ${R.walk.min} 分（${(R.walk.m / 1000).toFixed(1)} 公里）</p>`;
-      if (R.taxi) h += `<div class="plan"><b>🚕 計程車（估算）約 ${R.taxi.lo}～${R.taxi.hi} 元・${R.taxi.min} 分・${R.taxi.km} 公里</b>` +
-        `<div class="sub">${esc(R.taxi.rule)}${R.taxi.guess ? "（這個縣市沒逐一核對）" : ""}${R.taxi.night ? "・現在算夜間" : ""}</div>` +
-        `<div class="btns"><a class="btn small" href="tel:55688">📞 台灣大車隊 55688</a>` +
-        `<a class="btn small" href="https://m.uber.com/ul/?action=setPickup&pickup[latitude]=${R.o.lat}&pickup[longitude]=${R.o.lon}&dropoff[latitude]=${R.d.lat}&dropoff[longitude]=${R.d.lon}" target="_blank" rel="noopener">Uber</a></div></div>`;
-      h += `<div class="btns"><a class="btn small" href="${gmaps(R.o, R.d, "transit")}" target="_blank" rel="noopener">🗺️ Google 大眾運輸</a>` +
-        `<a class="btn small" href="${gmaps(R.o, R.d, "driving")}" target="_blank" rel="noopener">🚗 開車</a>` +
-        `<a class="btn small" href="${gmaps(R.o, R.d, "walking")}" target="_blank" rel="noopener">🚶 走路</a></div>`;
-    }
-    h += `</div>`;
-  }
-  box.innerHTML = h;
+  const w = $("#trip-box"); if (w) renderWhere(w);
+  const r = $("#trip-res"); if (r) renderTripRes(r);
 }

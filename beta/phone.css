@@ -21,60 +21,6 @@
 .stop.hl { background: var(--flag); border-radius: 8px; padding-left: 6px; padding-right: 6px; }
 .stop .e.off { color: var(--muted); }
 
-/* ── 還沒照電腦版重做的畫面（火車、想去哪、問 AI、快到提醒）：舊版樣式，包在 .legacy 裡，配色用同一套 ── */
-.legacy .card { background: var(--surface); border-radius: var(--r); padding: 14px; margin: 0 0 10px; }
-.legacy .card h3 { margin: 0 0 8px; font-size: 16px; font-weight: 900; }
-.legacy .card h3:has(.star) { display: flex; align-items: center; gap: 6px; }
-.legacy .card h3 .star { margin-left: auto; padding: 0 8px; font-size: 18px; border: 0; background: none; }
-.legacy button:not(.row):not(.link):not(.star), .legacy .btn { border: 1px solid var(--line); background: var(--surface2); border-radius: 12px; padding: 9px 14px;
-  font-weight: 700; color: var(--ink); text-decoration: none; display: inline-block; height: auto; font-size: 15px; }
-.legacy button:active { transform: scale(.97); }
-.legacy button:disabled { opacity: .45; }
-.legacy .primary { background: var(--accent) !important; color: var(--accent-ink) !important; border-color: var(--accent) !important; }
-.legacy .danger { color: var(--hot) !important; }
-.legacy button.small { padding: 5px 10px; font-size: 14px; }
-.legacy .muted { font-size: 14px; margin: 6px 0; }
-.legacy .small-t { font-size: 12px; margin-top: 12px; }
-.legacy .sub { color: var(--muted); font-size: 13px; }
-.legacy input[type=text], .legacy input[type=password], .legacy select, .legacy input[type=time], .legacy textarea {
-  border: 1px solid var(--line); background: var(--surface2); border-radius: 10px; padding: 9px 10px; font-size: 16px; color: var(--ink); }
-.legacy input[type=text], .legacy input[type=password] { width: 100%; margin: 4px 0 8px; }
-.legacy label { display: block; font-size: 14px; color: var(--muted); }
-.legacy .row { display: flex; align-items: center; gap: 10px; text-align: left; border-bottom: 1px solid var(--line); padding: 9px 2px; width: 100%; }
-.legacy .row:last-child { border-bottom: 0; }
-.legacy .row .d { min-width: 92px; color: var(--muted); font-size: 15px; }
-.legacy .row .eta { min-width: 92px; text-align: left; font-weight: 700; font-size: 16px; }
-.legacy .row .eta.now { color: var(--hot); } .legacy .row .eta.soon { color: var(--led); }
-.legacy .row .eta.off { color: var(--muted); font-weight: 400; font-size: 14px; }
-.legacy .row.train .eta { line-height: 1.25; }
-.legacy .row.train.hl, .legacy .tst.hl { background: var(--flag); border-radius: 8px; }
-.legacy .chips { margin: 8px 0; gap: 6px; }
-.legacy .chips .on { background: var(--accent) !important; color: var(--accent-ink) !important; border-color: var(--accent) !important; }
-.legacy .chips .sub { align-self: center; }
-.legacy .trow { display: flex; align-items: center; gap: 8px; margin: 6px 0; padding: 0; border: 0; grid-template-columns: none; }
-.legacy .trow input[type=text] { flex: 1; margin: 0; min-width: 0; }
-.legacy .trow select { max-width: 42%; }
-.legacy .link { border: 0; background: none; padding: 0; color: var(--accent); }
-.legacy .tbox { background: var(--surface2); border-radius: 10px; padding: 6px 10px; margin: 4px 0 8px; }
-.legacy .tst { display: flex; gap: 12px; padding: 3px 4px; font-size: 15px; }
-.legacy .tst span:first-child { min-width: 48px; color: var(--muted); font-family: var(--font-num); font-size: 17px; }
-.legacy .tst.past { color: var(--muted); }
-.legacy .ln { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
-.legacy .late { color: var(--hot); font-weight: 700; } .legacy .ok { color: var(--ok); }
-.legacy .plan { background: var(--surface2); border-radius: 12px; padding: 8px 10px; margin: 8px 0; display: block; }
-.legacy .tag2 { background: var(--accent); color: var(--accent-ink); border-radius: 8px; padding: 1px 8px; font-size: 13px; }
-.legacy .leg { display: block; border-top: 0; border-left: 3px solid var(--accent); padding: 3px 0 3px 8px; margin: 5px 0 0 4px; font-size: 15px; }
-.legacy .leg.walk { border-left-style: dotted; border-color: var(--muted); color: var(--muted); font-size: 14px; }
-.legacy .cands { margin-top: 6px; }
-.legacy .msg { display: block; border-radius: 14px; padding: 8px 12px; margin: 6px 0; max-width: 88%; line-height: 1.5; }
-.legacy .msg.me { background: var(--accent); color: var(--accent-ink); margin-left: auto; }
-.legacy .msg.ai { background: var(--surface2); }
-.legacy .card.ai h3 { display: flex; align-items: center; justify-content: space-between; }
-.legacy .rmform { background: var(--surface2); border-radius: 12px; padding: 8px 10px; margin-top: 8px; }
-.legacy .warn { background: var(--flag); border: 1px solid var(--flag-line); border-radius: 10px; padding: 8px 10px; margin-top: 10px; font-size: 14px; }
-.legacy .ck { display: flex; align-items: center; gap: 6px; margin: 6px 0; }
-.legacy .ai-open { display: none !important; }   /* 問 AI 改從常用頁上面的按鈕打開 */
-
 /* 站牌頁：路線列包在 display:contents 的按鈕裡，按鈕預設置中會傳下來，改回靠左 */
 .rrow .w { text-align: left; }
 
