@@ -61,6 +61,7 @@ body[data-tab="fav"] #pane-fav, body[data-tab="near"] #pane-near, body[data-tab=
 .row .eta.now { color: var(--danger); }
 .row .eta.soon { color: #e07b00; }
 .row .eta.off { color: var(--muted); font-weight: 400; font-size: 14px; }
+.row .star { padding: 4px 10px; font-size: 18px; border: 0; background: none; }   /* 附近加到常用 */
 .ev { border-left: 4px solid var(--accent); background: var(--surface2); border-radius: 10px; padding: 8px 10px; margin-top: 8px; }
 .ev-h { font-weight: 600; }
 .ev-d { color: var(--muted); font-size: 14px; }

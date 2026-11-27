@@ -2,7 +2,7 @@
 // 程式放 GitHub Pages（公開）；TDX 金鑰和常用資料只存在這支手機的 localStorage。
 // TDX 的資料 API 對瀏覽器預檢（OPTIONS）回 401、沒有 CORS 標頭，網頁不能自己查 → 由安卓外殼 BusBridge 代查（見 設計.md）。
 "use strict";
-const VERSION = "手機版 0.3";
+const VERSION = "手機版 0.4";
 const KEY = "busphone.v1";   // 同一個網域還有行事曆（calphone.v1）、之後的生活助手，名字別撞
 const IS_BETA = location.pathname.includes("/beta/");
 const KIND = {tra: "台鐵", thsr: "高鐵", metro: "捷運", bus: ""};   // 電腦版 favs 的 kind
@@ -146,16 +146,36 @@ async function findNear() {
         const k = (e.RouteName?.Zh_tw ?? "") + "|" + (e.Direction ?? 0);
         const v = etaOf(e);
         const old = g.buses[k];
-        if (!old || (v.m != null && (old.m == null || v.m < old.m))) g.buses[k] = {...v, route: e.RouteName?.Zh_tw ?? ""};
+        if (!old || (v.m != null && (old.m == null || v.m < old.m)))
+          g.buses[k] = {...v, route: e.RouteName?.Zh_tw ?? "", dir: e.Direction ?? 0, city: s.city};
       }
     }
     NEAR.groups = groups.filter(g => Object.keys(g.buses).length).slice(0, 8);
+    await routeEnds(NEAR.groups.flatMap(g => Object.values(g.buses)));
     NEAR.t = new Date();
   } catch (e) {
     NEAR.err = e.message;
   }
   NEAR.busy = false;
   renderNear();
+}
+
+// 路線的起訖站（「往哪裡」用）：去程往終點、返程往起點；同縣市一次查、記在記憶體（路線很少變）。查不到就不顯示，不影響到站時間
+const ENDS = {};   // 「縣市|路線」→ [起點, 終點]
+async function routeEnds(buses) {
+  const need = {};
+  buses.forEach(b => { if (b.route && !ENDS[b.city + "|" + b.route]) (need[b.city] = need[b.city] || new Set()).add(b.route); });
+  for (const [city, rs] of Object.entries(need)) {
+    const flt = [...rs].map(r => `RouteName/Zh_tw eq '${r.replace(/'/g, "''")}'`).join(" or ");
+    try {
+      for (const r of await tdx(`${busPath("Route", city)}?$filter=${flt}&$select=RouteName,DepartureStopNameZh,DestinationStopNameZh&$format=JSON`))
+        ENDS[city + "|" + (r.RouteName?.Zh_tw ?? "")] = [r.DepartureStopNameZh, r.DestinationStopNameZh];
+    } catch (e) { /* 查太頻繁等：這次先不顯示往哪裡 */ }
+  }
+  buses.forEach(b => {
+    const e = ENDS[b.city + "|" + b.route];
+    b.to = e ? (b.dir === 1 ? e[0] : e[1]) || "" : "";
+  });
 }
 
 function renderNear() {
@@ -167,7 +187,8 @@ function renderNear() {
   for (const g of NEAR.groups || []) {
     const bs = Object.values(g.buses).sort((a, b) => (a.m == null) - (b.m == null) || (a.m ?? 0) - (b.m ?? 0) || a.route.localeCompare(b.route, "zh-Hant"));
     h += `<div class="card"><h3>🚏 ${esc(g.name)} <span class="sub">約 ${g.m} 公尺</span></h3>` +
-      bs.map(b => `<div class="row"><span class="eta ${b.s}">${esc(b.t)}</span><span><b>${esc(b.route)}</b></span></div>`).join("") + `</div>`;
+      bs.map(b => `<div class="row"><span class="eta ${b.s}">${esc(b.t)}</span><span><b>${esc(b.route)}</b>` +
+        (b.to ? ` <span class="sub">往 ${esc(b.to)}</span>` : "") + `</span></div>`).join("") + `</div>`;
   }
   $("#pane-near").innerHTML = h;
 }
