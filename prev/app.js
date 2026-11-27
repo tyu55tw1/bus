@@ -2,7 +2,7 @@
 // 程式放 GitHub Pages（公開）；TDX 金鑰和常用資料只存在這支手機的 localStorage。
 // TDX 的資料 API 對瀏覽器預檢（OPTIONS）回 401、沒有 CORS 標頭，網頁不能自己查 → 由安卓外殼 BusBridge 代查（見 設計.md）。
 "use strict";
-const VERSION = "手機版 0.8";
+const VERSION = "手機版 0.9";
 const KEY = "busphone.v1";   // 同一個網域還有行事曆（calphone.v1）、之後的生活助手，名字別撞
 const IS_BETA = location.pathname.includes("/beta/");
 const KIND = {tra: "台鐵", thsr: "高鐵", metro: "捷運", bus: ""};   // 電腦版 favs 的 kind
@@ -141,7 +141,8 @@ async function refreshSched(favs) {
 
 async function refreshLive() {
   const favs = DB.data.favs.filter(f => f.t === "bus" && f.city && f.stop);
-  if (!favs.length || LIVE.busy || !window.BusBridge || !DB.settings.tdxId) return;
+  const trains = DB.data.favs.some(f => f.t === "rail" || f.t === "metro");
+  if ((!favs.length && !trains) || LIVE.busy || !window.BusBridge || !DB.settings.tdxId) return;
   LIVE.busy = true;
   const byCity = {};
   favs.forEach(f => (byCity[f.city] = byCity[f.city] || new Set()).add(f.stop));
@@ -155,11 +156,12 @@ async function refreshLive() {
       }
     } catch (e) { errs.push(e.message); }
   }
-  LIVE.busy = false;
   if (errs.length && !Object.keys(eta).length) LIVE.err = errs[0];   // 全部失敗就保留上一次的資料
   else { LIVE.eta = eta; LIVE.err = errs[0] || ""; LIVE.t = new Date(); }
   renderFav();
-  if (LIVE.t) { await refreshSched(favs); renderFav(); }
+  if (trains) { await refreshRailFavs(); renderFav(); }   // 火車、捷運（rail.js）
+  LIVE.busy = false;
+  if (LIVE.t && favs.length) { await refreshSched(favs); renderFav(); }
 }
 
 // ════════════ 附近（手機定位 → 300 公尺內的站牌 → 每站經過的公車幾分到；照電腦版 nearby_stops＋nearby_board） ════════════
@@ -424,6 +426,7 @@ function renderRoute(scroll) {
 
 // ════════════ 畫面 ════════════
 function favRow(f) {
+  if (f.t === "rail" || f.t === "metro") return railFavRow(f);   // rail.js
   if (f.t !== "bus") {
     return `<div class="row"><span>${esc(f.label || f.name)}</span><span class="d">${esc(KIND[f.kind] ?? "")}</span></div>`;
   }
@@ -446,8 +449,7 @@ function renderFav() {
     else if (LIVE.err) note = "查不到：" + LIVE.err;
     const at = LIVE.t ? LIVE.t.toLocaleTimeString("zh-TW", {hour12: false}) + " 更新・每 30 秒自動更新" : "";
     h += `<div class="card"><h3>⭐ 常用</h3>` + D.favs.map(favRow).join("") +
-      `<p class="muted small-t">${esc(note || at)}${note && at ? "（" + esc(at) + "）" : ""}</p>` +
-      `<p class="muted small-t">火車時刻之後幾步（第 3 步）才會做。</p></div>`;
+      `<p class="muted small-t">${esc(note || at)}${note && at ? "（" + esc(at) + "）" : ""}</p></div>`;
   }
   const pl = [["🏠 家", D.home], ["🏢 公司", D.work]].filter(([, p]) => p && p.name);
   if (pl.length) h += `<div class="card"><h3>📍 地點</h3>` + pl.map(([n, p]) => `<div class="row"><span>${n}</span><span class="d">${esc(p.name)}</span></div>`).join("") + `</div>`;
@@ -480,6 +482,7 @@ function render() {
   renderFav();
   renderNear();
   renderRoute();
+  renderRail();
   renderSet();
 }
 
@@ -509,6 +512,7 @@ document.addEventListener("click", async ev => {
   if (tab) {
     document.body.dataset.tab = tab.dataset.tab;
     document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b === tab));
+    if (tab.dataset.tab === "rail" && !RAIL.mode) railMode(["tra", "thsr", "metro"].includes(DB.data.railMode) ? DB.data.railMode : "tra");
     if (tab.dataset.tab === "route" && !RT.city && !RT.cur) pickCity(DB.data.city || DB.data.favs.find(f => f.city)?.city || "Tainan");
     return;
   }
@@ -546,6 +550,15 @@ document.addEventListener("click", async ev => {
   }
   if (act === "route") return openRoute(RT.city, b.dataset.r);
   if (act === "sub") { RT.cur.si = +b.dataset.i; return renderRoute(); }
+  // 火車（rail.js）
+  if (act === "rmode") return railMode(b.dataset.m);
+  if (act === "rswap") { const o = $("#rl-o"), d = $("#rl-d"); [o.value, d.value] = [d.value, o.value]; return; }
+  if (act === "rday") { RAIL.day = +b.dataset.d; RAIL.after = $("#rl-after")?.value || ""; const r = DB.data.rail[RAIL.mode]; r.o = $("#rl-o").value; r.d = $("#rl-d").value; return renderRail(); }
+  if (act === "rfind") return railFind();
+  if (act === "rtrain") return railTrain(b.dataset.no);
+  if (act === "rfav") return toggleRailFav();
+  if (act === "mfav") return toggleMetroFav();
+  if (act === "frail") { const f = DB.data.favs[+b.dataset.i]; return f && openRailFav(f); }
   if (act === "import") { toast("搬資料中…"); return window.BusBridge.importOld(); }
   if (act === "wipe") {
     if (!b.dataset.sure) { b.dataset.sure = "1"; b.textContent = "再按一次就清掉"; return; }
@@ -556,7 +569,12 @@ document.addEventListener("click", async ev => {
   }
 });
 
-document.addEventListener("change", ev => { if (ev.target.id === "rt-city" && ev.target.value) pickCity(ev.target.value); });
+document.addEventListener("change", ev => {
+  const id = ev.target.id;
+  if (id === "rt-city" && ev.target.value) pickCity(ev.target.value);
+  if (id === "mt-op") { railSet().metroOp = ev.target.value; save(); railMode("metro"); }
+  if (id === "mt-st" && ev.target.value) metroLook();
+});
 document.addEventListener("input", ev => { if (ev.target.id === "rt-q") { RT.q = ev.target.value; renderRoute(); } });
 
 document.body.dataset.tab = "fav";
@@ -568,6 +586,7 @@ setInterval(() => {
   if (document.hidden) return;
   if (document.body.dataset.tab === "fav") refreshLive();
   if (document.body.dataset.tab === "route") refreshRoute();
+  if (document.body.dataset.tab === "rail") { if (RAIL.mode === "metro") metroLook(); else if (RAIL.list?.today && !document.activeElement?.id?.startsWith("rl-")) renderRail(); }
 }, 30000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshLive(); });
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});

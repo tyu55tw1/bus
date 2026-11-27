@@ -174,3 +174,13 @@ button.ev { display: block; width: 100%; text-align: left; border: 0; border-lef
 .tabs button { font-size: 14px; }
 .card h3 .star { margin-left: auto; padding: 0 8px; font-size: 18px; border: 0; background: none; }
 .card h3:has(.star) { display: flex; align-items: center; gap: 6px; }
+
+/* 想去哪（第 4 步 1.0）：常用頁最上面 */
+.trip .chips .sub { align-self: center; }
+.cands { margin-top: 6px; }
+.plan { background: var(--surface2); border-radius: 12px; padding: 8px 10px; margin: 8px 0; }
+.plan .ph { margin-bottom: 2px; }
+.tag2 { background: var(--accent); color: var(--accent-ink); border-radius: 8px; padding: 1px 8px; font-size: 13px; }
+.leg { border-left: 3px solid var(--accent); padding: 3px 0 3px 8px; margin: 5px 0 0 4px; font-size: 15px; }
+.leg.walk { border-left-style: dotted; border-color: var(--muted); color: var(--muted); font-size: 14px; }
+.plan summary { cursor: pointer; }

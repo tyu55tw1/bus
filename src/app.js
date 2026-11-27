@@ -2,7 +2,7 @@
 // 程式放 GitHub Pages（公開）；TDX 金鑰和常用資料只存在這支手機的 localStorage。
 // TDX 的資料 API 對瀏覽器預檢（OPTIONS）回 401、沒有 CORS 標頭，網頁不能自己查 → 由安卓外殼 BusBridge 代查（見 設計.md）。
 "use strict";
-const VERSION = "手機版 0.9";
+const VERSION = "手機版 1.0";
 const KEY = "busphone.v1";   // 同一個網域還有行事曆（calphone.v1）、之後的生活助手，名字別撞
 const IS_BETA = location.pathname.includes("/beta/");
 const KIND = {tra: "台鐵", thsr: "高鐵", metro: "捷運", bus: ""};   // 電腦版 favs 的 kind
@@ -453,7 +453,7 @@ function renderFav() {
   }
   const pl = [["🏠 家", D.home], ["🏢 公司", D.work]].filter(([, p]) => p && p.name);
   if (pl.length) h += `<div class="card"><h3>📍 地點</h3>` + pl.map(([n, p]) => `<div class="row"><span>${n}</span><span class="d">${esc(p.name)}</span></div>`).join("") + `</div>`;
-  $("#pane-fav").innerHTML = h;
+  $("#fav-list").innerHTML = h;
 }
 
 function renderSet() {
@@ -479,6 +479,7 @@ function renderSet() {
 }
 
 function render() {
+  renderTrip();   // trip.js
   renderFav();
   renderNear();
   renderRoute();
@@ -550,6 +551,13 @@ document.addEventListener("click", async ev => {
   }
   if (act === "route") return openRoute(RT.city, b.dataset.r);
   if (act === "sub") { RT.cur.si = +b.dataset.i; return renderRoute(); }
+  // 想去哪（trip.js）
+  if (act === "tsearch") return tripSearch();
+  if (act === "tfrom") { TRIP.from = b.dataset.k; TRIP.q = $("#tp-q").value; return renderTrip(); }
+  if (act === "tquick") { const p = DB.data[b.dataset.k]; return tripGo({name: b.dataset.k === "home" ? "家" : "公司", lat: +p.lat, lon: +p.lon}); }
+  if (act === "tplace") { const p = DB.data.places[+b.dataset.i]; return p && tripGo({name: p.name, lat: +p.lat, lon: +p.lon}); }
+  if (act === "tpick") { const p = TRIP.cands?.[+b.dataset.i]; return p && tripGo(p); }
+  if (act === "tsave") return savePlace();
   // 火車（rail.js）
   if (act === "rmode") return railMode(b.dataset.m);
   if (act === "rswap") { const o = $("#rl-o"), d = $("#rl-d"); [o.value, d.value] = [d.value, o.value]; return; }
@@ -575,6 +583,7 @@ document.addEventListener("change", ev => {
   if (id === "mt-op") { railSet().metroOp = ev.target.value; save(); railMode("metro"); }
   if (id === "mt-st" && ev.target.value) metroLook();
 });
+document.addEventListener("keydown", ev => { if (ev.key === "Enter" && ev.target.id === "tp-q") tripSearch(); });
 document.addEventListener("input", ev => { if (ev.target.id === "rt-q") { RT.q = ev.target.value; renderRoute(); } });
 
 document.body.dataset.tab = "fav";
