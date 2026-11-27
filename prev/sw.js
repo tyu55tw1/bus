@@ -1,7 +1,7 @@
 // 公車手機版的離線快取：每次打開先抓網路上的新版（改完不用重裝），抓不到就用手機裡存的那一份。
 // 只快取程式本身（同一個網址底下的檔案），金鑰、常用站牌存在 localStorage，到站資料由 App 代查 TDX，不經過這裡。
-const CACHE = "busphone-v11";
-const SHELL = ["./", "index.html", "rail.js", "trip.js", "ai.js", "app.js", "app.css", "manifest.json", "icons/icon-192.png"];
+const CACHE = "busphone-v12";
+const SHELL = ["./", "index.html", "rail.js", "trip.js", "ai.js", "remind.js", "app.js", "app.css", "manifest.json", "icons/icon-192.png"];
 
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
