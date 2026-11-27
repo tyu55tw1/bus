@@ -57,6 +57,10 @@ body[data-tab="fav"] #pane-fav, body[data-tab="set"] #pane-set { display: block;
   border-radius: 0; padding: 8px 2px; }
 .row .d { min-width: 92px; color: var(--muted); font-size: 15px; }
 .row .dot { margin-left: auto; }
+.row .eta { min-width: 92px; font-weight: 700; font-size: 16px; }   /* 常用的到站時間（第 2 步） */
+.row .eta.now { color: var(--danger); }
+.row .eta.soon { color: #e07b00; }
+.row .eta.off { color: var(--muted); font-weight: 400; font-size: 14px; }
 .ev { border-left: 4px solid var(--accent); background: var(--surface2); border-radius: 10px; padding: 8px 10px; margin-top: 8px; }
 .ev-h { font-weight: 600; }
 .ev-d { color: var(--muted); font-size: 14px; }
