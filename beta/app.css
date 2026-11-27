@@ -192,3 +192,8 @@ button.ev { display: block; width: 100%; text-align: left; border: 0; border-lef
 .msg.me { background: var(--accent); color: var(--accent-ink); margin-left: auto; }
 .msg.ai { background: var(--surface2); }
 .card.ai .trow { margin-top: 8px; }
+
+/* 快到提醒（第 5 步 1.2） */
+.rmform { background: var(--surface2); border-radius: 12px; padding: 8px 10px; margin-top: 8px; }
+.rmform .chips .sub { align-self: center; }
+.card .warn { margin-top: 10px; font-size: 14px; }

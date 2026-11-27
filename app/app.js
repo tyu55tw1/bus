@@ -2,7 +2,7 @@
 // 程式放 GitHub Pages（公開）；TDX 金鑰和常用資料只存在這支手機的 localStorage。
 // TDX 的資料 API 對瀏覽器預檢（OPTIONS）回 401、沒有 CORS 標頭，網頁不能自己查 → 由安卓外殼 BusBridge 代查（見 設計.md）。
 "use strict";
-const VERSION = "手機版 1.1";
+const VERSION = "手機版 1.2";
 const KEY = "busphone.v1";   // 同一個網域還有行事曆（calphone.v1）、之後的生活助手，名字別撞
 const IS_BETA = location.pathname.includes("/beta/");
 const KIND = {tra: "台鐵", thsr: "高鐵", metro: "捷運", bus: ""};   // 電腦版 favs 的 kind
@@ -482,6 +482,7 @@ function renderSet() {
 function render() {
   renderTrip();   // trip.js
   renderAi();     // ai.js
+  renderRemind(); // remind.js
   renderFav();
   renderNear();
   renderRoute();
@@ -553,6 +554,14 @@ document.addEventListener("click", async ev => {
   }
   if (act === "route") return openRoute(RT.city, b.dataset.r);
   if (act === "sub") { RT.cur.si = +b.dataset.i; return renderRoute(); }
+  // 快到提醒（remind.js）
+  if (act === "rmopen" || act === "rmcancel") { RM.open = act === "rmopen"; return renderRemind(); }
+  if (act === "rmadd") return rmAdd();
+  if (act === "rmdel") return rmDel(b.dataset.id);
+  if (act === "rmmin") { RM.min = +b.dataset.m; return renderRemind(); }
+  if (act === "rmkind") { RM.kind = b.dataset.k; return renderRemind(); }
+  if (act === "rmday") { const d = +b.dataset.d; RM.days = RM.days.includes(d) ? RM.days.filter(x => x !== d) : [...RM.days, d]; return renderRemind(); }
+  if (act === "rmbat") return BusBridge.openBattery();
   // 問 AI（ai.js）
   if (act === "aiopen" || act === "aiclose") { AI.open = act === "aiopen"; renderAi(); if (AI.open) $("#ai-q")?.focus(); return; }
   if (act === "aisend") { const t = $("#ai-q").value; $("#ai-q").value = ""; return aiAsk(t); }
@@ -609,5 +618,5 @@ setInterval(() => {
   if (document.body.dataset.tab === "route") refreshRoute();
   if (document.body.dataset.tab === "rail") { if (RAIL.mode === "metro") metroLook(); else if (RAIL.list?.today && !document.activeElement?.id?.startsWith("rl-")) renderRail(); }
 }, 30000);
-document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshLive(); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { refreshLive(); renderRemind(); } });
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
