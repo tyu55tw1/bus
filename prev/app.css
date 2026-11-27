@@ -25,7 +25,7 @@ button:active, .btn:active { transform: scale(.97); }
 .tag { background: var(--flag); border: 1px solid var(--flag-line); border-radius: 8px; padding: 0 8px; font-size: 13px; }
 main { padding: 0 12px 96px; max-width: 1180px; margin: 0 auto; }
 .pane { display: none; }
-body[data-tab="fav"] #pane-fav, body[data-tab="set"] #pane-set { display: block; }
+body[data-tab="fav"] #pane-fav, body[data-tab="near"] #pane-near, body[data-tab="set"] #pane-set { display: block; }
 .card input[type=text], .card input[type=password] { width: 100%; box-sizing: border-box; padding: 10px; margin: 4px 0 8px; font-size: 16px;
   border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: inherit; }
 .tabs { position: fixed; left: 0; right: 0; bottom: 0; display: flex; background: var(--surface); border-top: 1px solid var(--line);
