@@ -36,7 +36,7 @@ const toast = msg => UI.toast(msg);
 const RETRY = {}, WAITS = {};   // key → 重查的函式；key → 倒數到幾點（毫秒）
 function busySecs(e) {
   const m = String(e?.message ?? e ?? "");
-  if (!/頻繁|429|限流/.test(m)) return 0;
+  if (!/頻繁|429|限流|額度暫時用完/.test(m)) return 0;
   const n = m.match(/（(\d+) 秒）/);
   return n ? Math.max(1, +n[1]) : 60;
 }
@@ -792,7 +792,8 @@ function cityPicker() {
 function openAi() {
   AI.open = true;
   UI.push(`<header class="top"><button class="back">${icon("back")}常用</button><h1 class="center">問 AI</h1><span style="width:60px"></span></header>
-    <div class="scroll"><div id="ai-box" class="legacy"></div></div>`, {onPop: () => { AI.open = false; }});
+    <div class="scroll chat" id="ai-box"></div>
+    <div class="chatbar"><input type="text" id="ai-q" placeholder="想問什麼？例如：去成大醫院" autocomplete="off" enterkeyhint="send"><button class="btn press" data-act="aisend">送出</button></div>`, {onPop: () => { AI.open = false; }});
   renderAi();
   $("#ai-q")?.focus();
 }
@@ -802,7 +803,7 @@ function openRemind(f) {
     if (i >= 0) { RM.fav = i; RM.open = true; }
   }
   if (!$("#remind-box")) UI.push(`<header class="top"><button class="back">${icon("back")}返回</button><h1 class="center">快到提醒</h1><span style="width:60px"></span></header>
-    <div class="scroll"><div id="remind-box" class="legacy"></div></div>`, {onPop: () => { RM.open = false; renderFav(); renderSet(); }});
+    <div class="scroll"><div id="remind-box"></div></div>`, {onPop: () => { RM.open = false; renderFav(); renderSet(); }});
   renderRemind();
 }
 // 想去哪＝查路線分頁的「路線規劃（A 到 B）」
@@ -906,13 +907,14 @@ document.addEventListener("click", async ev => {
   if (act === "rmopen" || act === "rmcancel") { RM.open = act === "rmopen"; return renderRemind(); }
   if (act === "rmadd") { rmAdd(); renderFav(); return; }
   if (act === "rmdel") { rmDel(b.dataset.id); renderFav(); return; }
+  if (act === "rmfav") { RM.fav = +b.dataset.i; return renderRemind(); }
   if (act === "rmmin") { RM.min = +b.dataset.m; return renderRemind(); }
   if (act === "rmkind") { RM.kind = b.dataset.k; return renderRemind(); }
   if (act === "rmday") { const d = +b.dataset.d; RM.days = RM.days.includes(d) ? RM.days.filter(x => x !== d) : [...RM.days, d]; return renderRemind(); }
   if (act === "rmbat") return BusBridge.openBattery();
   // 問 AI（ai.js）
   if (act === "aiopen") return openAi();
-  if (act === "aiclose") return UI.pop();
+  if (act === "aisugg") return aiAsk(b.dataset.t);
   if (act === "aisend") { const t = $("#ai-q").value; $("#ai-q").value = ""; return aiAsk(t); }
   if (act === "aiclear") { AI.msgs = []; AI.hist = []; AI.retry = null; return renderAi(); }
   if (act === "aibtn") return aiBtn(+b.dataset.j);

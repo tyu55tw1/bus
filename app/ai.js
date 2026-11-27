@@ -325,27 +325,30 @@ function aiButtons(ctx) {
   return out;
 }
 
+// 1.4：畫面照電腦版 openChat（對話泡泡＋底部輸入列，app.js 的 openAi 推進頁）
+const AI_SUGG = ["明天早上 8 點要到成大醫院，幾點出門？", "去最近的家樂福", "回家怎麼搭最快？", "記住我不喜歡轉車"];
 function renderAi() {
   const box = $("#ai-box");
   if (!box) return;
-  if (!AI.open) { box.innerHTML = `<button class="ai-open" data-act="aiopen">💬 問 AI（用說的查怎麼去）</button>`; return; }
-  let h = `<div class="card ai"><h3>💬 問 AI <button class="x" data-act="aiclose" title="收起來">✕</button></h3>`;
-  if (!DB.settings.gemKey) h += `<p class="muted">先到 ⚙️ 設定輸入 Gemini 金鑰（免費，aistudio.google.com 申請），才能問 AI。</p>`;
-  if (!AI.msgs.length) h += `<p class="muted">例如：「明天早上 8 點要到成大醫院，幾點出門？」「去最近的家樂福」「不想轉車呢？」「記住我家在…」</p>`;
+  let h = "";
+  if (!DB.settings.gemKey) h += `<div class="aihint">先按常用頁右上齒輪輸入 Gemini 金鑰（免費，aistudio.google.com 申請），才能問 AI。</div>`;
+  if (!AI.msgs.length) h += `<div class="aihint">用說的查怎麼去：AI 會幫你查路線、公車幾分到、計程車大概多少錢。查到的數字都是 TDX 真的資料。</div>` +
+    `<div class="chips sugg">` + AI_SUGG.map(t => `<button class="chip press" data-act="aisugg" data-t="${esc(t)}">${esc(t)}</button>`).join("") + `</div>`;
   AI.msgs.forEach((m, i) => {
-    h += `<div class="msg ${m.who}">${esc(m.text).replace(/\n/g, "<br>")}</div>`;
-    if (m.btns?.length && i === AI.msgs.length - 1) h += `<div class="chips">` + m.btns.map((b, j) => b.href
-      ? `<a class="btn small" href="${esc(b.href)}" target="_blank" rel="noopener">${esc(b.t)}</a>`
-      : `<button class="small" data-act="aibtn" data-j="${j}">${esc(b.t)}</button>`).join("") + `</div>`;
+    h += `<div class="msg ${m.who}"><div class="bub">${esc(m.text).replace(/\n/g, "<br>")}</div>`;
+    if (m.btns?.length && i === AI.msgs.length - 1) h += `<div class="aibtns">` + m.btns.map((b, j) => b.href
+      ? `<a class="btn sm ghost" href="${esc(b.href)}" target="_blank" rel="noopener">${esc(b.t)}</a>`
+      : `<button class="btn sm ghost press" data-act="aibtn" data-j="${j}">${esc(b.t)}</button>`).join("") + `</div>`;
+    h += `</div>`;
   });
-  if (AI.busy) h += `<div class="msg ai muted">查詢中…</div>`;
+  if (AI.busy) h += `<div class="msg ai"><div class="bub wait"><span class="spin"></span>查詢中…</div></div>`;
   else if (AI.retry) h += errBox("ai", AI.retry.err, () => { const r = AI.retry; AI.retry = null; if (r && AI.open) aiAsk(r.text, r.show); });   // 撞到上限倒數（app.js）
-  h += `<div class="trow"><input type="text" id="ai-q" placeholder="想問什麼？" autocomplete="off" ${AI.busy ? "disabled" : ""}>` +
-    `<button class="primary small" data-act="aisend" ${AI.busy ? "disabled" : ""}>送出</button></div>` +
-    (AI.msgs.length ? `<button class="small" data-act="aiclear">清除對話</button>` : "") + `</div>`;
-  const had = document.activeElement?.id === "ai-q", v = $("#ai-q")?.value || "";
+  if (AI.msgs.length && !AI.busy) h += `<div class="cap"><button class="textbtn" data-act="aiclear">清除對話</button></div>`;
   box.innerHTML = h;
-  if (had && !AI.busy) { const i = $("#ai-q"); i.value = v; i.focus(); }
+  box.scrollTop = box.scrollHeight;
+  const q = $("#ai-q"), s = $("[data-act=aisend]");
+  if (q) q.disabled = AI.busy;
+  if (s) s.disabled = AI.busy;
 }
 
 function aiBtn(j) {
