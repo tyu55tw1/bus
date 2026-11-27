@@ -2,7 +2,7 @@
 // 程式放 GitHub Pages（公開）；TDX 金鑰和常用資料只存在這支手機的 localStorage。
 // TDX 的資料 API 對瀏覽器預檢（OPTIONS）回 401、沒有 CORS 標頭，網頁不能自己查 → 由安卓外殼 BusBridge 代查（見 設計.md）。
 "use strict";
-const VERSION = "手機版 1.5";
+const VERSION = "手機版 1.6";
 const KEY = "busphone.v1";   // 同一個網域還有行事曆（calphone.v1）、之後的生活助手，名字別撞
 const IS_BETA = location.pathname.includes("/beta/");
 const KIND = {tra: "台鐵", thsr: "高鐵", metro: "捷運", bus: ""};   // 電腦版 favs 的 kind
@@ -741,9 +741,19 @@ function openEdit() {
 
 // ── 設定（推進頁，電腦版 openSettings；TDX、Gemini 金鑰、從電腦版搬過來是手機版才有的） ──
 let SET = null;
+// 1.6（2026-11-28 使用者）：設定頁要指紋或螢幕鎖密碼才能進（外殼 1.6 的 BusBridge.auth）；驗過 5 分鐘內再進不用再驗；舊外殼沒有 auth 就不鎖
+let authAt = 0, authWant = false;
+const needAuth = () => !!(window.BusBridge && BusBridge.auth) && Date.now() - authAt > 5 * 60000;
+window.onAuth = function (ok) {
+  if (!ok) { authWant = false; return UI.toast("沒有驗證成功，設定還是鎖著"); }
+  authAt = Date.now();
+  if (authWant) { authWant = false; openSettings(); }
+};
 function openSettings() {
+  if (needAuth()) { authWant = true; return BusBridge.auth("打開公車設定"); }
+  authAt = Date.now();
   SET = UI.push(`<header class="top"><button class="back">${icon("back")}常用</button><h1 class="center">設定</h1><span style="width:60px"></span></header>
-    <div class="scroll"><div data-body></div></div>`, {onPop: () => { SET = null; renderFav(); refreshLive(); }});
+    <div class="scroll"><div data-body></div></div>`, {onPop: () => { SET = null; authAt = Date.now(); renderFav(); refreshLive(); }});
   renderSet();
 }
 function renderSet() {
