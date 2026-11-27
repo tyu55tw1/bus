@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2f5fb3">
+<meta name="referrer" content="no-referrer">
+<title>公車</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<!-- 公車手機版（2026-11-27 起）：程式放 GitHub Pages（公開），TDX 金鑰、常用站牌、家／公司只存在手機（localStorage） -->
+<div id="app">
+  <header class="top">
+    <h1 id="ttl">公車</h1>
+    <span id="beta" class="tag" hidden>測試版</span>
+  </header>
+  <main id="main">
+    <section id="pane-fav" class="pane"></section>
+    <section id="pane-set" class="pane"></section>
+  </main>
+  <nav class="tabs">
+    <button data-tab="fav" class="on">⭐ 常用</button>
+    <button data-tab="set">⚙️ 設定</button>
+  </nav>
+</div>
+<div id="toast" class="toast" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
