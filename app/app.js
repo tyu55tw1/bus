@@ -2,7 +2,7 @@
 // 程式放 GitHub Pages（公開）；TDX 金鑰和常用資料只存在這支手機的 localStorage。
 // TDX 的資料 API 對瀏覽器預檢（OPTIONS）回 401、沒有 CORS 標頭，網頁不能自己查 → 由安卓外殼 BusBridge 代查（見 設計.md）。
 "use strict";
-const VERSION = "手機版 1.0";
+const VERSION = "手機版 1.1";
 const KEY = "busphone.v1";   // 同一個網域還有行事曆（calphone.v1）、之後的生活助手，名字別撞
 const IS_BETA = location.pathname.includes("/beta/");
 const KIND = {tra: "台鐵", thsr: "高鐵", metro: "捷運", bus: ""};   // 電腦版 favs 的 kind
@@ -462,6 +462,7 @@ function renderSet() {
     `<label>Client ID<input type="text" id="tdx-id" autocomplete="off" value="${esc(S.tdxId)}"></label>` +
     `<label>Client Secret<input type="password" id="tdx-sec" autocomplete="off" value="${esc(S.tdxSecret)}"></label>` +
     `<div class="btns"><button class="primary" data-act="savekey">存起來</button><button data-act="testkey">測試連線</button></div></div>`;
+  h += aiSetCard();   // ai.js
   h += `<div class="card"><h3>📥 從電腦版搬過來</h3>`;
   if (window.BusBridge) {
     h += `<p class="muted">手機要開 Tailscale、電腦要開著。會把電腦版的常用站牌、家／公司、常去地點、火車設定複製到手機（電腦版不會動）。</p>` +
@@ -480,6 +481,7 @@ function renderSet() {
 
 function render() {
   renderTrip();   // trip.js
+  renderAi();     // ai.js
   renderFav();
   renderNear();
   renderRoute();
@@ -551,6 +553,12 @@ document.addEventListener("click", async ev => {
   }
   if (act === "route") return openRoute(RT.city, b.dataset.r);
   if (act === "sub") { RT.cur.si = +b.dataset.i; return renderRoute(); }
+  // 問 AI（ai.js）
+  if (act === "aiopen" || act === "aiclose") { AI.open = act === "aiopen"; renderAi(); if (AI.open) $("#ai-q")?.focus(); return; }
+  if (act === "aisend") { const t = $("#ai-q").value; $("#ai-q").value = ""; return aiAsk(t); }
+  if (act === "aiclear") { AI.msgs = []; AI.hist = []; return renderAi(); }
+  if (act === "aibtn") return aiBtn(+b.dataset.j);
+  if (act === "savegem") { DB.settings.gemKey = $("#gem-key").value.trim(); save(); renderAi(); return toast("存好了"); }
   // 想去哪（trip.js）
   if (act === "tsearch") return tripSearch();
   if (act === "tfrom") { TRIP.from = b.dataset.k; TRIP.q = $("#tp-q").value; return renderTrip(); }
@@ -583,7 +591,11 @@ document.addEventListener("change", ev => {
   if (id === "mt-op") { railSet().metroOp = ev.target.value; save(); railMode("metro"); }
   if (id === "mt-st" && ev.target.value) metroLook();
 });
-document.addEventListener("keydown", ev => { if (ev.key === "Enter" && ev.target.id === "tp-q") tripSearch(); });
+document.addEventListener("keydown", ev => {
+  if (ev.key !== "Enter") return;
+  if (ev.target.id === "tp-q") tripSearch();
+  if (ev.target.id === "ai-q") { const t = ev.target.value; ev.target.value = ""; aiAsk(t); }
+});
 document.addEventListener("input", ev => { if (ev.target.id === "rt-q") { RT.q = ev.target.value; renderRoute(); } });
 
 document.body.dataset.tab = "fav";

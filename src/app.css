@@ -184,3 +184,11 @@ button.ev { display: block; width: 100%; text-align: left; border: 0; border-lef
 .leg { border-left: 3px solid var(--accent); padding: 3px 0 3px 8px; margin: 5px 0 0 4px; font-size: 15px; }
 .leg.walk { border-left-style: dotted; border-color: var(--muted); color: var(--muted); font-size: 14px; }
 .plan summary { cursor: pointer; }
+
+/* 問 AI（第 4 步 1.1） */
+.ai-open { width: 100%; margin: 0 0 12px; padding: 10px; }
+.card.ai h3 { display: flex; align-items: center; justify-content: space-between; }
+.msg { border-radius: 14px; padding: 8px 12px; margin: 6px 0; max-width: 88%; line-height: 1.5; }
+.msg.me { background: var(--accent); color: var(--accent-ink); margin-left: auto; }
+.msg.ai { background: var(--surface2); }
+.card.ai .trow { margin-top: 8px; }

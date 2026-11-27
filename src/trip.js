@@ -121,9 +121,10 @@ function pickPlans(rs) {
   for (const [tag, r] of picks) { const o = out.find(x => x.r === r); if (o) o.tags.push(tag); else out.push({r, tags: [tag]}); }
   return out.map(x => ({...x.r, tags: x.tags}));
 }
-async function plans(o, d) {
-  const t = new Date(Date.now() + 60e3), p2 = n => String(n).padStart(2, "0");
-  const dep = `${t.getFullYear()}-${p2(t.getMonth() + 1)}-${p2(t.getDate())}T${p2(t.getHours())}:${p2(t.getMinutes())}:00`;
+const p2 = n => String(n).padStart(2, "0");
+const isoMin = t => `${t.getFullYear()}-${p2(t.getMonth() + 1)}-${p2(t.getDate())}T${p2(t.getHours())}:${p2(t.getMinutes())}`;
+async function plans(o, d, when) {   // when：幾點出發（Date，不給＝現在＋1 分；問 AI 會給）
+  const t = when || new Date(Date.now() + 60e3), dep = isoMin(t) + ":00";
   const q = `origin=${o.lat.toFixed(6)},${o.lon.toFixed(6)}&destination=${d.lat.toFixed(6)},${d.lon.toFixed(6)}&gc=0.5&top=5&transit=3,4,5,6` +
     `&transfer_time=5,40&first_mile_mode=0&first_mile_time=15&last_mile_mode=0&last_mile_time=15&depart=${dep}`;
   let j;
@@ -133,8 +134,8 @@ async function plans(o, d) {
   }
   if (j.result !== "success") return [];
   const rs = ((j.data || {}).routes || []).map(parseRoute).filter(r => r.start && r.end);
-  // TDX 偶爾混進已經開走的車（電腦版 11/20 碰過）：濾掉出發比現在早的；全部都是才照原樣給
-  const n = new Date(), now = `${n.getFullYear()}-${p2(n.getMonth() + 1)}-${p2(n.getDate())}T${p2(n.getHours())}:${p2(n.getMinutes())}`;
+  // TDX 偶爾混進已經開走的車（電腦版 11/20 碰過）：濾掉出發比查詢時間早的；全部都是才照原樣給
+  const now = isoMin(new Date(t.getTime() - 60e3));
   const ok = rs.filter(r => r.start.slice(0, 16) >= now);
   return pickPlans(ok.length ? ok : rs);
 }
