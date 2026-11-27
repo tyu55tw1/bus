@@ -2,7 +2,7 @@
 // 程式放 GitHub Pages（公開）；TDX 金鑰和常用資料只存在這支手機的 localStorage。
 // TDX 的資料 API 對瀏覽器預檢（OPTIONS）回 401、沒有 CORS 標頭，網頁不能自己查 → 由安卓外殼 BusBridge 代查（見 設計.md）。
 "use strict";
-const VERSION = "手機版 0.4";
+const VERSION = "手機版 0.5";
 const KEY = "busphone.v1";   // 同一個網域還有行事曆（calphone.v1）、之後的生活助手，名字別撞
 const IS_BETA = location.pathname.includes("/beta/");
 const KIND = {tra: "台鐵", thsr: "高鐵", metro: "捷運", bus: ""};   // 電腦版 favs 的 kind
@@ -147,7 +147,7 @@ async function findNear() {
         const v = etaOf(e);
         const old = g.buses[k];
         if (!old || (v.m != null && (old.m == null || v.m < old.m)))
-          g.buses[k] = {...v, route: e.RouteName?.Zh_tw ?? "", dir: e.Direction ?? 0, city: s.city};
+          g.buses[k] = {...v, route: e.RouteName?.Zh_tw ?? "", dir: e.Direction ?? 0, city: s.city, stop: s.uid, sub: e.SubRouteUID};
       }
     }
     NEAR.groups = groups.filter(g => Object.keys(g.buses).length).slice(0, 8);
@@ -178,18 +178,32 @@ async function routeEnds(buses) {
   });
 }
 
+// 附近的路線加到常用（同一站牌、同一條路線、同一個方向算同一個；再按一次拿掉）
+const isFav = b => DB.data.favs.some(f => f.t === "bus" && f.stop === b.stop && f.route === b.route && (f.dir ?? 0) === b.dir);
+function toggleFav(g, b) {
+  const i = DB.data.favs.findIndex(f => f.t === "bus" && f.stop === b.stop && f.route === b.route && (f.dir ?? 0) === b.dir);
+  if (i >= 0) DB.data.favs.splice(i, 1);
+  else DB.data.favs.push({t: "bus", city: b.city, stop: b.stop, route: b.route, name: g.name, sub: b.sub, dir: b.dir, to: b.to || ""});
+  save();
+  renderNear();
+  renderFav();
+  if (i < 0) refreshLive();
+  toast(i >= 0 ? `拿掉了：${b.route}` : `加到常用：${b.route} ${g.name}`);
+}
+
 function renderNear() {
   let h = `<div class="card"><h3>📍 附近站牌</h3><p class="muted">用手機定位找 300 公尺內的站牌和經過的公車。</p>` +
     `<button class="primary" data-act="near" ${NEAR.busy ? "disabled" : ""}>${NEAR.busy ? "查詢中…" : NEAR.groups ? "🔄 重新整理" : "📍 找附近站牌"}</button>` +
     (NEAR.err ? `<p class="muted">查不到：${esc(NEAR.err)}</p>` : "") +
     (NEAR.t ? `<p class="muted small-t">${NEAR.t.toLocaleTimeString("zh-TW", {hour12: false})} 更新</p>` : "") + `</div>`;
   if (NEAR.groups && !NEAR.groups.length) h += `<div class="card"><p class="muted">300 公尺內沒有找到有公車資料的站牌。</p></div>`;
-  for (const g of NEAR.groups || []) {
-    const bs = Object.values(g.buses).sort((a, b) => (a.m == null) - (b.m == null) || (a.m ?? 0) - (b.m ?? 0) || a.route.localeCompare(b.route, "zh-Hant"));
+  (NEAR.groups || []).forEach((g, gi) => {
+    const bs = Object.entries(g.buses).sort(([, a], [, b]) => (a.m == null) - (b.m == null) || (a.m ?? 0) - (b.m ?? 0) || a.route.localeCompare(b.route, "zh-Hant"));
     h += `<div class="card"><h3>🚏 ${esc(g.name)} <span class="sub">約 ${g.m} 公尺</span></h3>` +
-      bs.map(b => `<div class="row"><span class="eta ${b.s}">${esc(b.t)}</span><span><b>${esc(b.route)}</b>` +
-        (b.to ? ` <span class="sub">往 ${esc(b.to)}</span>` : "") + `</span></div>`).join("") + `</div>`;
-  }
+      bs.map(([k, b]) => `<div class="row"><span class="eta ${b.s}">${esc(b.t)}</span><span><b>${esc(b.route)}</b>` +
+        (b.to ? ` <span class="sub">往 ${esc(b.to)}</span>` : "") + `</span>` +
+        `<button class="star dot" data-act="addfav" data-g="${gi}" data-k="${esc(k)}" title="加到常用">${isFav(b) ? "⭐" : "☆"}</button></div>`).join("") + `</div>`;
+  });
   $("#pane-near").innerHTML = h;
 }
 
@@ -299,6 +313,10 @@ document.addEventListener("click", async ev => {
     return;
   }
   if (act === "near") return findNear();
+  if (act === "addfav") {
+    const g = NEAR.groups?.[+b.dataset.g], bus = g?.buses[b.dataset.k];
+    return bus && toggleFav(g, bus);
+  }
   if (act === "import") { toast("搬資料中…"); return window.BusBridge.importOld(); }
   if (act === "wipe") {
     if (!b.dataset.sure) { b.dataset.sure = "1"; b.textContent = "再按一次就清掉"; return; }

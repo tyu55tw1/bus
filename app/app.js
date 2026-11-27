@@ -2,7 +2,7 @@
 // 程式放 GitHub Pages（公開）；TDX 金鑰和常用資料只存在這支手機的 localStorage。
 // TDX 的資料 API 對瀏覽器預檢（OPTIONS）回 401、沒有 CORS 標頭，網頁不能自己查 → 由安卓外殼 BusBridge 代查（見 設計.md）。
 "use strict";
-const VERSION = "手機版 0.5";
+const VERSION = "手機版 0.6";
 const KEY = "busphone.v1";   // 同一個網域還有行事曆（calphone.v1）、之後的生活助手，名字別撞
 const IS_BETA = location.pathname.includes("/beta/");
 const KIND = {tra: "台鐵", thsr: "高鐵", metro: "捷運", bus: ""};   // 電腦版 favs 的 kind
@@ -78,7 +78,9 @@ function etaOf(e) {
 function favEta(f) {
   const c = (LIVE.eta[f.stop + "|" + f.route] || []).slice()
     .sort((a, b) => (a.EstimateTime == null) - (b.EstimateTime == null) || (a.EstimateTime || 0) - (b.EstimateTime || 0));
-  return etaOf(c.find(x => x.SubRouteUID === f.sub) || c.find(x => (x.Direction ?? 0) === (f.dir ?? 0)));
+  return etaOf((f.sub && c.find(x => x.SubRouteUID === f.sub)) || c.find(x => (x.Direction ?? 0) === (f.dir ?? 0)) ||
+    // 晚上常對不上（TDX 回 Direction 255）：只借「末班車已過」這類狀態，不借分鐘數（可能是對向的車）
+    c.find(x => x.StopStatus && x.EstimateTime == null));
 }
 
 async function refreshLive() {
