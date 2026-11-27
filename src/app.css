@@ -25,7 +25,7 @@ button:active, .btn:active { transform: scale(.97); }
 .tag { background: var(--flag); border: 1px solid var(--flag-line); border-radius: 8px; padding: 0 8px; font-size: 13px; }
 main { padding: 0 12px 96px; max-width: 1180px; margin: 0 auto; }
 .pane { display: none; }
-body[data-tab="fav"] #pane-fav, body[data-tab="near"] #pane-near, body[data-tab="route"] #pane-route, body[data-tab="set"] #pane-set { display: block; }
+body[data-tab="fav"] #pane-fav, body[data-tab="near"] #pane-near, body[data-tab="route"] #pane-route, body[data-tab="rail"] #pane-rail, body[data-tab="set"] #pane-set { display: block; }
 .card input[type=text], .card input[type=password] { width: 100%; box-sizing: border-box; padding: 10px; margin: 4px 0 8px; font-size: 16px;
   border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: inherit; }
 .tabs { position: fixed; left: 0; right: 0; bottom: 0; display: flex; background: var(--surface); border-top: 1px solid var(--line);
@@ -157,3 +157,20 @@ button.ev { display: block; width: 100%; text-align: left; border: 0; border-lef
 .stop .sn { display: inline-block; min-width: 24px; color: var(--muted); font-size: 13px; text-align: right; }
 .stop.hl { background: var(--flag); border-radius: 8px; }
 .stop .bus { font-size: 13px; color: var(--accent); white-space: nowrap; }
+
+/* 火車（第 3 步 0.9）：車次列表、停靠站、捷運線色、誤點 */
+.row.train .eta { line-height: 1.25; }
+.row.train.hl, .tst.hl { background: var(--flag); border-radius: 8px; }
+.tbox { background: var(--surface2); border-radius: 10px; padding: 6px 10px; margin: 4px 0 8px; }
+.tst { display: flex; gap: 12px; padding: 3px 4px; font-size: 15px; }
+.tst span:first-child { min-width: 48px; color: var(--muted); }
+.tst.past { color: var(--muted); }
+.ln { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.late { color: var(--danger); font-weight: 600; }
+.ok { color: #2e8b57; }
+.rfav { flex-direction: column; align-items: stretch; }
+.rfav .row { border: 0; padding: 2px 0; }
+.trow input[type=time] { border: 1px solid var(--line); background: var(--surface2); border-radius: 10px; padding: 6px; font: inherit; color: inherit; }
+.tabs button { font-size: 14px; }
+.card h3 .star { margin-left: auto; padding: 0 8px; font-size: 18px; border: 0; background: none; }
+.card h3:has(.star) { display: flex; align-items: center; gap: 6px; }
