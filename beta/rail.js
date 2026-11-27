@@ -109,9 +109,7 @@ async function railMode(mode) {
 
 async function railFind() {
   const D = railSet(), kind = RAIL.mode, r = D.rail[kind];
-  r.o = $("#rl-o").value.trim(); r.d = $("#rl-d").value.trim();
-  RAIL.after = $("#rl-after").value || "";
-  save();
+  save();   // 1.4：起訖站在選站抽屜選（電腦版 pickStation），不再讀輸入框
   const o = stId(RAIL.sts || [], r.o), d = stId(RAIL.sts || [], r.d);
   if (!o || !d) { RAIL.err = `找不到車站「${!o ? r.o : r.d}」，從清單挑`; return renderRail(); }
   if (o === d) { RAIL.err = "起站和迄站一樣"; return renderRail(); }
@@ -130,9 +128,12 @@ async function railFind() {
 // 一班車停哪些站、現在到哪（台鐵今天用即時位置；高鐵照時刻推算）——電腦版 api_train
 async function railTrain(no) {
   const L = RAIL.list;
-  if (RAIL.train?.no === no) { RAIL.train = null; return renderRail(); }   // 再按一次收起來
-  const T = RAIL.train = {no, busy: true, stops: [], cur: null, note: ""};
-  renderRail();
+  const x = L.rows.find(r => r.no === no) || {no};
+  const T = RAIL.train = {no, busy: true, stops: [], cur: null, note: "", x, on: [L.o, L.d]};
+  // 1.4：電腦版 openTrain 的推進頁
+  T.s = UI.push(`<header class="top"><button class="back">${icon("back")}火車</button><h1 class="center">${esc(x.type || (L.kind === "thsr" ? "高鐵" : ""))} ${esc(no)} 次</h1><span style="width:60px"></span></header>
+    <div class="scroll"><div class="small muted" style="margin:0 2px 10px">${esc(dayLabel(L.day))}${x.dep ? `・${x.dep} 開 → ${x.arr} 到・往 ${esc(x.to || "")}${x.svc ? "・" + esc(x.svc) : ""}` : ""}</div><div data-body><div class="skel"></div></div></div>`,
+    {onPop: () => { if (RAIL.train === T) RAIL.train = null; }});
   try {
     if (L.kind === "tra") {
       if (!L.today) T.note = "台鐵的車次停靠站只能查今天的。";
@@ -162,13 +163,12 @@ async function railTrain(no) {
     }
   } catch (e) { T.note = "查不到：" + e.message; }
   T.busy = false;
-  if (RAIL.train === T) renderRail();
+  if (RAIL.train === T) drawTrain();
 }
 
 async function metroLook() {
-  const D = railSet(), op = D.metroOp, sel = $("#mt-st");
-  if (sel && sel.value) { D.metroSt[op] = sel.value; save(); }
-  const ids = D.metroSt[op];
+  const D = railSet(), op = D.metroOp;
+  const ids = mtIds(op);
   if (!ids) return;
   const old = RAIL.metro?.ids?.join(",") === ids ? RAIL.metro.rows : null;
   const M = RAIL.metro = {op, ids: ids.split(","), busy: true, rows: old, err: ""};
@@ -198,63 +198,128 @@ function toggleMetroFav() {
   toast(i >= 0 ? "從常用拿掉了" : `加到常用：${opn} ${name}`);
 }
 
-function renderRail() {
-  const D = railSet();
-  const modes = [["tra", "🚆 台鐵"], ["thsr", "🚄 高鐵"], ["metro", "🚇 捷運"]];
-  let h = `<div class="card"><div class="chips">` + modes.map(([m, n]) => `<button class="small ${m === RAIL.mode ? "on" : ""}" data-act="rmode" data-m="${m}">${n}</button>`).join("") + `</div>`;
-  if (RAIL.mode === "tra" || RAIL.mode === "thsr") {
-    const r = D.rail[RAIL.mode];
-    h += `<datalist id="rl-sts">${(RAIL.sts || []).map(s => `<option value="${esc(s[1])}">`).join("")}</datalist>` +
-      `<div class="trow"><input type="text" id="rl-o" list="rl-sts" placeholder="起站" value="${esc(r.o)}" autocomplete="off">` +
-      `<button class="small" data-act="rswap" title="對調">⇄</button>` +
-      `<input type="text" id="rl-d" list="rl-sts" placeholder="迄站" value="${esc(r.d)}" autocomplete="off"></div>` +
-      `<div class="trow"><span class="chips">` + ["今天", "明天", "後天"].map((n, i) => `<button class="small ${i === RAIL.day ? "on" : ""}" data-act="rday" data-d="${i}">${n}</button>`).join("") +
-      `</span><label class="sub">幾點以後 <input type="time" id="rl-after" value="${esc(RAIL.after)}"></label></div>` +
-      `<button class="primary" data-act="rfind" ${RAIL.busy || !RAIL.sts ? "disabled" : ""}>${RAIL.busy ? "查詢中…" : "🔍 查車次"}</button>`;
-  } else if (RAIL.mode === "metro") {
-    h += `<div class="trow"><select id="mt-op">` + Object.entries(METRO).map(([n, c]) => `<option value="${c}" ${c === D.metroOp ? "selected" : ""}>${n}</option>`).join("") + `</select>` +
-      `<select id="mt-st"><option value="">選車站</option>` + (RAIL.sts || []).map(s => `<option value="${esc(s[0])}" ${s[0] === D.metroSt[D.metroOp] ? "selected" : ""}>${esc(s[1])}</option>`).join("") + `</select></div>`;
-    if (RAIL.busy) h += `<p class="muted">查車站中…</p>`;
-  }
-  if (RAIL.err) h += `<p class="muted">查不到：${esc(RAIL.err)}</p>`;
-  h += `</div>`;
-  const L = RAIL.list;
-  if (L && L.kind === RAIL.mode) {
-    h += `<div class="card"><h3>${esc(L.on)} → ${esc(L.dn)} <span class="sub">${L.day.slice(5).replace("-", "/")}・${L.rows.length} 班</span>` +
-      `<button class="star dot" data-act="rfav" title="加到常用">${railFav(L.kind, L.o, L.d) >= 0 ? "⭐" : "☆"}</button></h3>`;
-    if (!L.rows.length) h += `<p class="muted">這個時間以後沒有車了。</p>`;
-    h += L.rows.slice(0, 40).map(x => {
-      const m = L.today ? minsTo(x.dep) : null, sel = RAIL.train?.no === x.no;
-      return `<button class="row full train${sel ? " hl" : ""}" data-act="rtrain" data-no="${esc(x.no)}">` +
-        `<span class="eta ${m != null && m <= 10 ? "soon" : ""}">${esc(x.dep)}<br><span class="sub">${m == null ? "" : m <= 0 ? "快開了" : fmtMin(m) + "後"}</span></span>` +
-        `<span><b>${esc(x.type)} ${esc(x.no)}</b> 往${esc(x.to)}${x.delay != null ? ` <span class="${x.delay ? "late" : "ok"}">${delayText(x.delay)}</span>` : ""}` +
-        `<br><span class="sub">${esc(x.dep)}→${esc(x.arr)}・${fmtMin(x.ride)} ${esc(x.svc)} ${esc(x.note)}</span></span></button>` +
-        (sel ? trainBox() : "");
-    }).join("") + (L.rows.length > 40 ? `<p class="muted small-t">只列前 40 班，要看更晚的改「幾點以後」。</p>` : "") +
-      `<p class="muted small-t">點車次看停靠站和現在到哪。</p></div>`;
-  }
-  const M = RAIL.metro;
-  if (RAIL.mode === "metro" && M) {
-    const name = (RAIL.sts || []).find(s => s[0] === M.ids.join(","))?.[1] || "";
-    h += `<div class="card"><h3>🚇 ${esc(name)}<button class="star dot" data-act="mfav" title="加到常用">${metroFav(M.op, M.ids.join(",")) >= 0 ? "⭐" : "☆"}</button></h3>`;
-    if (M.err) h += `<p class="muted">查不到：${esc(M.err)}</p>`;
-    if (M.rows && !M.rows.length) h += `<p class="muted">目前沒有即時資料（可能還沒營運或末班已過）</p>`;
-    h += (M.rows || []).map(metroRow).join("");
-    h += `<p class="muted small-t">${M.busy ? "查詢中…" : M.t ? M.t.toLocaleTimeString("zh-TW", {hour12: false}) + " 更新・每 30 秒自動更新" : ""}</p></div>`;
-  }
-  const keep = document.activeElement?.id;
-  $("#pane-rail").innerHTML = h;
-  if (keep && /^rl-/.test(keep)) $("#" + keep)?.focus();
-}
-const metroRow = x => `<div class="row"><span class="eta ${x.m === 0 ? "now" : x.m != null && x.m <= 3 ? "soon" : x.m == null ? "off" : ""}">${esc(x.t)}</span>` +
-  `<span><span class="ln" style="background:${x.c}"></span>${esc(x.dest)} <span class="sub">${esc(x.lname)}</span></span></div>`;
+// ── 畫面（1.4 起照電腦版 renderRail／renderTrain／railResHtml／openTrain／renderMetro） ──
+const dayLabel = iso => { const d = new Date(iso + "T00:00"); return `${d.getMonth() + 1}/${d.getDate()}（${"日一二三四五六"[d.getDay()]}）`; };
+const TRAIN_COLORS = [["普悠瑪", "#FDE2E2", "#B91C1C"], ["太魯閣", "#FDE2E2", "#B91C1C"], ["自強", "#FFE4CC", "#B45309"], ["莒光", "#FFF4BF", "#8A5A00"],
+  ["區間快", "#D7F0FF", "#0369A1"], ["區間", "#E3E8FF", "#3730A3"], ["復興", "#E8F5E9", "#2E7D32"], ["普快", "#EEEEEE", "#424242"]];
+const trainCss = n => { const c = TRAIN_COLORS.find(x => String(n || "").startsWith(x[0])); return c ? `background:${c[1]};color:${c[2]}` : ""; };
+// 捷運車站：手機版存代碼字串，電腦版搬過來的是 {ids, name}
+const mtIds = op => { const v = railSet().metroSt[op]; return v && typeof v === "object" ? v.ids : v || ""; };
 
-function trainBox() {
+function renderRail() {
+  const box = $("#pane-rail");
+  if (!box) return;
+  const D = railSet(), mode = RAIL.mode || "tra";
+  let h = `<div class="seg" style="margin-bottom:12px">` + [["tra", "台鐵"], ["thsr", "高鐵"], ["metro", "捷運"]].map(([k, t]) =>
+    `<button aria-pressed="${mode === k}" data-act="rmode" data-m="${k}">${t}</button>`).join("") + `</div>`;
+  if (mode === "metro") h += metroHtml(D);
+  else {
+    const r = D.rail[mode];
+    h += `<div class="pickrow"><button class="pickbtn press" data-act="rpick" data-p="o"><span>起站</span><b>${esc(r.o || "選起站")}</b></button>
+        <button class="swapbtn press" data-act="rswap" aria-label="起訖站對調">${icon("swap")}</button>
+        <button class="pickbtn press" data-act="rpick" data-p="d"><span>迄站</span><b>${esc(r.d || "選迄站")}</b></button></div>
+      <div class="label"><span>日期</span></div>
+      <div class="chips scrollx">${[0, 1, 2].map(n => `<button class="chip press" aria-pressed="${RAIL.day === n}" data-act="rday" data-d="${n}">${["今天", "明天", "後天"][n]}</button>`).join("")}</div>
+      <div class="label"><span>幾點以後</span></div>
+      <div class="chips"><button class="chip press" aria-pressed="${!RAIL.after}" data-act="rnow">${RAIL.day === 0 ? "現在" : "整天"}</button>
+        <label class="chip pick" aria-pressed="${!!RAIL.after}">${RAIL.after ? `${esc(RAIL.after)} 以後` : "指定時間"}<input type="time" id="rl-after" value="${esc(RAIL.after)}" aria-label="幾點以後"></label></div>
+      <button class="btn block press" data-act="rfind" style="margin-top:16px"${RAIL.busy ? " disabled" : ""}>${RAIL.busy ? '<span class="spin"></span>查詢中…' : "查詢時刻表"}</button>`;
+    if (RAIL.err) h += `<div style="margin-top:12px">${errBox("rail", RAIL.err, () => RAIL.sts ? railFind() : railMode(mode))}</div>`;
+    h += railResHtml(mode);
+  }
+  box.innerHTML = h;
+}
+
+function railResHtml(kind) {
+  const L = RAIL.list;
+  if (!L || L.kind !== kind) return RAIL.err ? "" : `<div class="cap" style="margin-top:14px">選好起訖站按「查詢時刻表」。點某一班可以看停靠站和現在到哪。</div>`;
+  const on = railFav(L.kind, L.o, L.d) >= 0;
+  const head = `<div class="label"><span>${esc(L.on)} → ${esc(L.dn)}・${esc(dayLabel(L.day))}${RAIL.after ? `・${esc(RAIL.after)} 以後` : ""}</span>
+    <button data-act="rfav">${on ? "★ 已在常用" : "☆ 加到常用"}</button></div>`;
+  if (!L.rows.length) return head + `<div class="note">這個時間以後沒有車了（台鐵兩站之間沒有直達車時，可以用「查路線」裡的路線規劃）。</div>`;
+  return head + `<div class="cardlist">` + L.rows.slice(0, 40).map(t => {
+    const m = L.today ? minsTo(t.dep) : null;
+    return `<button class="trow press" data-act="rtrain" data-no="${esc(t.no)}">
+      <span><span class="tm">${esc(t.dep)}<small>→</small>${esc(t.arr)}</span><div class="s"><span class="ttag" style="${trainCss(t.type)}">${esc(t.type || (kind === "thsr" ? "高鐵" : ""))}</span>${esc(t.no)} 次・${fmtMin(t.ride)}${t.note ? "・" + esc(t.note) : ""}${delayHtml(t.delay)}</div></span>
+      <span class="r">${m != null ? (m <= 0 ? `<b class="soon">快開了</b>` : m < 120 ? `<b class="${m <= 5 ? "soon" : ""}">${m}<small>分後開</small></b>` : `<span class="small muted">${Math.floor(m / 60)} 小時後</span>`) : ""}</span></button>`;
+  }).join("") + `</div>` + (L.rows.length > 40 ? `<div class="cap">只列前 40 班，要看更晚的改「幾點以後」</div>` : "") +
+    (kind === "tra" ? `<div class="cap">「準點／晚 N 分」是起站的即時看板，只有快到站的車才有</div>` : "");
+}
+
+// 車次頁內容（railTrain 查完呼叫）
+function drawTrain() {
   const T = RAIL.train;
-  if (T.busy) return `<div class="tbox"><p class="muted">查停靠站中…</p></div>`;
-  return `<div class="tbox">` + (T.note ? `<p class="muted">${esc(T.note)}</p>` : "") +
-    T.stops.map((s, i) => `<div class="tst${i === T.cur ? " hl" : ""}${T.cur != null && i < T.cur ? " past" : ""}">` +
-      `<span>${esc(s.arr || s.dep)}</span><span>${i === T.cur ? "🚆 " : ""}${esc(s.name)}</span></div>`).join("") + `</div>`;
+  if (!T || !T.s || !T.s.isConnected) return;
+  const body = $("[data-body]", T.s);
+  if (!T.stops.length) { body.innerHTML = `<div class="note">${esc(T.note || "查不到這班車的停靠站。")}</div>`; return; }
+  body.innerHTML = (T.note ? `<div class="card" style="margin-bottom:10px"><b>${esc(T.note)}</b></div>` : "") +
+    `<div class="card"><div class="line">` + T.stops.map((x, i) => `<div class="stop${T.on.includes(x.id) ? " mine" : ""}${T.cur != null && i < T.cur ? " past" : ""}">` +
+      (i === T.cur ? `<span class="busm">車</span>` : "") + `<span class="nm">${esc(x.name)}${T.on.includes(x.id) ? `<small>${x.id === T.on[0] ? "上車" : "下車"}</small>` : ""}</span>` +
+      `<span class="e">${x.arr && x.dep && x.arr !== x.dep ? `${esc(x.arr)} 到・${esc(x.dep)} 開` : esc(x.dep || x.arr)}</span></div>`).join("") + `</div></div>`;
+}
+
+function metroHtml(D) {
+  const op = D.metroOp, ids = mtIds(op), M = RAIL.metro;
+  const name = (RAIL.sts || []).find(s => s[0] === ids)?.[1] || (typeof D.metroSt[op] === "object" ? D.metroSt[op].name : "");
+  let h = `<div class="chips scrollx" style="margin-bottom:12px">` + Object.entries(METRO).map(([n, c]) =>
+    `<button class="chip press" aria-pressed="${c === op}" data-act="mtop" data-op="${c}">${esc(n)}</button>`).join("") + `</div>
+    <button class="pickbtn press" data-act="rpick" data-p="m"><span>車站</span><b>${ids ? esc(name || "車站") : "點這裡選車站"}</b></button>`;
+  if (RAIL.err) h += `<div style="margin-top:12px">${errBox("rail", RAIL.err, () => railMode("metro"))}</div>`;
+  if (!ids) return h + `<div class="cap" style="margin-top:14px">選車站後顯示各方向下一班還有幾分到。</div>`;
+  const on = metroFav(op, ids) >= 0;
+  h += `<div class="label"><span>各方向下一班</span><button data-act="mfav">${on ? "★ 已在常用" : "☆ 加到常用"}</button></div>`;
+  if (M?.err) h += errBox("metro", M.err, () => metroLook());
+  if (!M || (!M.rows && M.busy)) h += `<div class="skel"></div>`;
+  else if (M.rows && !M.rows.length) h += `<div class="note">目前沒有即時資料（可能還沒營運或末班已過）。</div>`;
+  else if (M.rows) h += `<div class="cardlist">` + M.rows.map(r => `<div class="rrow" style="grid-template-columns:auto 1fr auto"><span class="badge sm" style="background:${esc(r.c)};min-width:14px;width:14px;padding:0"></span>
+      <span class="w"><b>${esc(r.dest)}</b><span>${esc(r.lname)}</span></span>${r.m == null ? `<span class="eta off sm"><span class="n">—</span></span>` : r.m === 0 ? `<span class="eta now sm"><span class="n">進站中</span></span>` :
+      `<span class="eta sm ${r.m <= 3 ? "soon" : ""}"><span class="n num">${r.m}<small>分</small></span></span>`}</div>`).join("") + `</div>`;
+  h += `<div class="cap">${M?.t ? M.t.toLocaleTimeString("zh-TW", {hour12: false}) + " 更新・" : ""}開著這頁每 30 秒更新・台中捷運 TDX 目前沒有即時資料</div>`;
+  return h;
+}
+
+// 選站抽屜（電腦版 pickStation）：搜尋、最近用過、全部；which：o 起站、d 迄站、m 捷運車站
+async function railPick(which) {
+  const D = railSet(), kind = which === "m" ? D.metroOp : RAIL.mode;
+  const sh = UI.sheet(which === "o" ? "選起站" : which === "d" ? "選迄站" : "選車站",
+    `<div class="field">${icon("search")}<input type="search" id="st-q" placeholder="打站名搜尋，例如：台南、左營" aria-label="搜尋車站" autocomplete="off"></div><div id="st-l" style="margin-top:6px"><div class="cap"><span class="spin"></span>載入車站…</div></div>`);
+  let list;
+  try { list = RAIL.sts && RAIL.mode === (which === "m" ? "metro" : kind) ? RAIL.sts : await stations(kind); }
+  catch (e) { $("#st-l", sh).innerHTML = `<div class="note bad">${esc(String(e.message).replace(/（\d+ 秒）/, ""))}，等一下再試</div>`; return; }
+  const cur = which === "m" ? mtIds(kind) : D.rail[kind][which];
+  const norm = t => zhs(t).replace(/\s+/g, "").replace(/(.{2,})(車站|站)$/, "$1");
+  const tile = s => `<button class="tile press" aria-pressed="${which === "m" ? s[0] === cur : s[1] === cur}" data-act="stpick" data-w="${which}" data-id="${esc(s[0])}" data-n="${esc(s[1])}">${esc(s[1])}</button>`;
+  const LN = {KRTC: {R: "紅線", O: "橘線"}, KLRT: {C: "環狀輕軌"}, TYMC: {A: "機場線"}, TRTC: {BL: "板南線", R: "淡水信義線", G: "松山新店線", O: "中和新蘆線", BR: "文湖線", Y: "環狀線"}};
+  function draw() {
+    const inp = $("#st-q", sh), L = $("#st-l", sh);
+    if (!inp || !L) return;
+    const q = norm(inp.value);
+    if (q) {
+      const hit = list.filter(s => norm(s[1]).includes(q));
+      L.innerHTML = hit.length ? `<div class="tiles" style="margin-top:8px">${hit.map(tile).join("")}</div>` : `<div class="cap">找不到「${esc(inp.value)}」</div>`;
+      return;
+    }
+    const rec = ((D.st || {})[kind] || []).map(n => list.find(s => s[1] === n)).filter(Boolean);
+    const groups = {};
+    list.forEach(s => { const g = which === "m" ? (LN[kind] || {})[s[2]] || s[2] || "車站" : kind === "thsr" ? "高鐵站" : "全部車站"; (groups[g] = groups[g] || []).push(s); });
+    L.innerHTML = (rec.length ? `<div class="grouph">最近用過</div><div class="tiles">${rec.map(tile).join("")}</div>` : "") +
+      Object.keys(groups).map(g => `<div class="grouph">${esc(g)}</div><div class="tiles">${groups[g].map(tile).join("")}</div>`).join("");
+  }
+  $("#st-q", sh).oninput = draw;
+  draw();
+}
+function railPicked(which, id, name) {
+  const D = railSet();
+  UI.closeSheet();
+  if (which === "m") {
+    D.metroSt[D.metroOp] = id; save();
+    RAIL.metro = null; renderRail(); return metroLook();
+  }
+  const kind = RAIL.mode;
+  D.st = D.st && typeof D.st === "object" ? D.st : {};
+  D.st[kind] = [name, ...(D.st[kind] || []).filter(n => n !== name)].slice(0, 6);
+  D.rail[kind][which] = name; save();
+  renderRail();
 }
 
 // 常用裡的火車、捷運（電腦版 _fav_rail：今天接下來 3 班，快開的台鐵加誤點；_fav_metro：即時看板前 6 筆）
@@ -274,20 +339,6 @@ async function refreshRailFavs() {
       }
     } catch (e) { FAVX.set(f, {...FAVX.get(f), err: e.message}); }
   }
-}
-
-function railFavRow(f) {
-  const x = FAVX.get(f), i = DB.data.favs.indexOf(f);
-  let body = "";
-  if (!x) body = `<span class="sub">${window.BusBridge && DB.settings.tdxId ? "…" : ""}</span>`;
-  else if (x.trains) body = x.trains.length ? x.trains.map(t => {
-    const m = minsTo(t.dep);
-    return `<div class="sub">${m <= 0 ? "快開了" : fmtMin(m) + "後"}・<b>${esc(t.dep)}</b>→${esc(t.arr)} ${esc(t.type)} ${esc(t.no)}` +
-      (t.delay != null ? ` <span class="${t.delay ? "late" : "ok"}">${delayText(t.delay)}</span>` : "") + `</div>`;
-  }).join("") : `<div class="sub">今天沒有車了</div>`;
-  else if (x.rows) body = x.rows.length ? x.rows.map(metroRow).join("") : `<div class="sub">目前沒有即時資料</div>`;
-  if (x?.err && !x.trains && !x.rows) body = `<div class="sub">查不到：${esc(x.err)}</div>`;
-  return `<button class="row full rfav" data-act="frail" data-i="${i}"><span><b>${esc(f.label || f.name)}</b>${body}</span></button>`;
 }
 
 // 常用點火車、捷運 → 火車分頁直接查

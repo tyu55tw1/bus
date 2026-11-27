@@ -927,8 +927,12 @@ document.addEventListener("click", async ev => {
   if (act === "tsave") return savePlace();
   // 火車（rail.js）
   if (act === "rmode") return railMode(b.dataset.m);
-  if (act === "rswap") { const o = $("#rl-o"), d = $("#rl-d"); [o.value, d.value] = [d.value, o.value]; return; }
-  if (act === "rday") { RAIL.day = +b.dataset.d; RAIL.after = $("#rl-after")?.value || ""; const r = DB.data.rail[RAIL.mode]; r.o = $("#rl-o").value; r.d = $("#rl-d").value; return renderRail(); }
+  if (act === "rswap") { const r = railSet().rail[RAIL.mode]; [r.o, r.d] = [r.d, r.o]; save(); return renderRail(); }
+  if (act === "rday") { RAIL.day = +b.dataset.d; return renderRail(); }
+  if (act === "rnow") { RAIL.after = ""; return renderRail(); }
+  if (act === "rpick") return railPick(b.dataset.p);
+  if (act === "stpick") return railPicked(b.dataset.w, b.dataset.id, b.dataset.n);
+  if (act === "mtop") { railSet().metroOp = b.dataset.op; save(); return railMode("metro"); }
   if (act === "rfind") return railFind();
   if (act === "rtrain") return railTrain(b.dataset.no);
   if (act === "rfav") return toggleRailFav();
@@ -950,8 +954,7 @@ document.addEventListener("click", async ev => {
 
 document.addEventListener("change", ev => {
   const id = ev.target.id;
-  if (id === "mt-op") { railSet().metroOp = ev.target.value; save(); railMode("metro"); }
-  if (id === "mt-st" && ev.target.value) metroLook();
+  if (id === "rl-after") { RAIL.after = ev.target.value; renderRail(); }
 });
 document.addEventListener("keydown", ev => {
   if (ev.key !== "Enter") return;
