@@ -2,7 +2,7 @@
 // 程式放 GitHub Pages（公開）；TDX 金鑰和常用資料只存在這支手機的 localStorage。
 // TDX 的資料 API 對瀏覽器預檢（OPTIONS）回 401、沒有 CORS 標頭，網頁不能自己查 → 由安卓外殼 BusBridge 代查（見 設計.md）。
 "use strict";
-const VERSION = "手機版 0.7";
+const VERSION = "手機版 0.8";
 const KEY = "busphone.v1";   // 同一個網域還有行事曆（calphone.v1）、之後的生活助手，名字別撞
 const IS_BETA = location.pathname.includes("/beta/");
 const KIND = {tra: "台鐵", thsr: "高鐵", metro: "捷運", bus: ""};   // 電腦版 favs 的 kind
@@ -37,8 +37,16 @@ function toast(msg, ms = 2600) {
 // ════════════ TDX（由 App 代查） ════════════
 // tdx("v2/Bus/Route/City/Taipei?$top=1") → JSON；App 查完呼叫 window.onTdx(id, 文字, 錯誤)
 const waiting = {};
-let seq = 0;
+let seq = 0, tdxLine = Promise.resolve();
+const nap = ms => new Promise(r => setTimeout(r, ms));
+// 常用、附近、路線同時在查很容易 429：全部排隊、一次一個、間隔 1.2 秒；碰到「查太頻繁」等 6 秒、再等 15 秒各試一次
 function tdx(path) {
+  const again = ms => e => /頻繁|429/.test(e.message) ? nap(ms).then(() => tdx1(path)) : Promise.reject(e);
+  const run = tdxLine.then(() => tdx1(path)).catch(again(6000)).catch(again(15000));
+  tdxLine = run.catch(() => {}).then(() => nap(1200));
+  return run;
+}
+function tdx1(path) {
   if (!window.BusBridge) return Promise.reject(new Error("要在公車 App 裡才查得到（瀏覽器不能直接查 TDX）"));
   const {tdxId, tdxSecret} = DB.settings;
   if (!tdxId || !tdxSecret) return Promise.reject(new Error("先到 ⚙️ 設定輸入 TDX 金鑰"));
@@ -251,11 +259,167 @@ function renderNear() {
   (NEAR.groups || []).forEach((g, gi) => {
     const bs = Object.entries(g.buses).sort(([, a], [, b]) => (a.m == null) - (b.m == null) || (a.m ?? 0) - (b.m ?? 0) || a.route.localeCompare(b.route, "zh-Hant"));
     h += `<div class="card"><h3>🚏 ${esc(g.name)} <span class="sub">約 ${g.m} 公尺</span></h3>` +
-      bs.map(([k, b]) => `<div class="row"><span class="eta ${b.s}">${esc(b.t)}</span><span><b>${esc(b.route)}</b>` +
+      bs.map(([k, b]) => `<div class="row"><span class="eta ${b.s}">${esc(b.t)}</span><span><button class="link" data-act="nroute" data-g="${gi}" data-k="${esc(k)}"><b>${esc(b.route)}</b></button>` +
         (b.to ? ` <span class="sub">往 ${esc(b.to)}</span>` : "") + `</span>` +
         `<button class="star dot" data-act="addfav" data-g="${gi}" data-k="${esc(k)}" title="加到常用">${isFav(b) ? "⭐" : "☆"}</button></div>`).join("") + `</div>`;
   });
   $("#pane-near").innerHTML = h;
+}
+
+// ════════════ 查路線（照電腦版 api_route＋api_route_live：整條路線每站幾分、公車在哪一站） ════════════
+// 路線名稱清單一個縣市一天查一次（存手機，不是個人資料）；打開一條路線查 StopOfRoute 一次，之後每 30 秒查到站＋公車位置 2 次
+const CITIES = {"臺北市": "Taipei", "新北市": "NewTaipei", "桃園市": "Taoyuan", "臺中市": "Taichung", "臺南市": "Tainan",
+  "高雄市": "Kaohsiung", "基隆市": "Keelung", "新竹市": "Hsinchu", "新竹縣": "HsinchuCounty", "苗栗縣": "MiaoliCounty",
+  "彰化縣": "ChanghuaCounty", "南投縣": "NantouCounty", "雲林縣": "YunlinCounty", "嘉義市": "Chiayi", "嘉義縣": "ChiayiCounty",
+  "屏東縣": "PingtungCounty", "宜蘭縣": "YilanCounty", "花蓮縣": "HualienCounty", "臺東縣": "TaitungCounty",
+  "金門縣": "KinmenCounty", "澎湖縣": "PenghuCounty", "連江縣": "LienchiangCounty", "公路客運（國道／跨縣市）": "InterCity"};
+const RKEY = "busphone.routes";   // 縣市 → {t, names}
+const RT = {city: "", q: "", names: null, busy: false, err: "", cur: null};   // cur：{city, route, subs, si, hl, eta, bus, t, err}
+const routeQ = r => `$filter=RouteName/Zh_tw eq '${r.replace(/'/g, "''")}'&$format=JSON`;
+
+async function loadNames(city) {
+  let all = {};
+  try { all = JSON.parse(localStorage.getItem(RKEY) || "{}"); } catch (e) { /* 壞掉就重查 */ }
+  if (all[city] && Date.now() - all[city].t < 86400e3) return all[city].names;
+  const names = [...new Set((await tdx(busPath("Route", city) + "?$select=RouteName&$format=JSON")).map(x => x.RouteName?.Zh_tw).filter(Boolean))]
+    .sort((a, b) => !/^\d/.test(a) - !/^\d/.test(b) || a.length - b.length || a.localeCompare(b, "zh-Hant"));
+  all[city] = {t: Date.now(), names};
+  localStorage.setItem(RKEY, JSON.stringify(all));
+  return names;
+}
+
+async function pickCity(city) {
+  RT.city = city; RT.names = null; RT.err = ""; RT.busy = true; renderRoute();
+  try { RT.names = await loadNames(city); } catch (e) { RT.err = e.message; }
+  RT.busy = false; renderRoute();
+}
+
+// 打開一條路線；dir／hl（站牌 UID）是從附近、常用點過來時用的：選那個方向、標出那一站
+async function openRoute(city, route, dir, hl, sub) {
+  document.body.dataset.tab = "route";
+  document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === "route"));
+  RT.cur = {city, route, subs: null, si: 0, hl, eta: [], bus: [], t: null, err: "", busy: true};
+  renderRoute();
+  const cur = RT.cur;
+  try {
+    cur.raw = await tdx(busPath("StopOfRoute", city) + "?" + routeQ(route));
+    const subs = cur.raw.filter(r => (r.Stops || []).length);
+    const names = subs.map(r => r.SubRouteName?.Zh_tw || r.RouteName?.Zh_tw || route);
+    cur.subs = subs.map((r, i) => {
+      const last = r.Stops[r.Stops.length - 1]?.StopName?.Zh_tw || "";
+      return {sub: r.SubRouteUID, dir: r.Direction ?? 0, last,
+        label: names.filter(n => n === names[i]).length === 1 && names.length > 1 && names[i] !== route ? names[i] : `往 ${last}`,
+        stops: r.Stops.map(s => ({uid: s.StopUID, name: s.StopName?.Zh_tw || ""}))};
+    });
+    const has = s => !hl || s.stops.some(x => x.uid === hl);
+    const i = cur.subs.findIndex(s => sub && s.sub === sub && has(s));
+    const j = i >= 0 ? i : cur.subs.findIndex(s => (dir == null || s.dir === dir) && has(s));
+    cur.si = Math.max(0, j >= 0 ? j : cur.subs.findIndex(has));
+    if (!cur.subs.length) cur.err = "查不到這條路線的站牌";
+  } catch (e) { cur.err = e.message; }
+  cur.busy = false;
+  if (RT.cur !== cur) return;
+  renderRoute(true);
+  if (!cur.subs?.length) return;
+  await refreshRoute();
+  // 首末班、班距（電腦版 api_route）：時刻表跟常用共用快取，6 小時內不重查
+  const k = city + "|" + route;
+  if (!SCHED[k]?.rows || Date.now() - SCHED[k].t > 6 * 3600e3) {
+    try { SCHED[k] = {t: Date.now(), rows: await tdx(busPath("Schedule", city) + "?" + routeQ(route)), stops: cur.raw}; } catch (e) { /* 沒有時刻表就不顯示 */ }
+  }
+  if (RT.cur === cur) renderRoute();
+}
+
+// 這個子路線今天起點站的首班、末班、班距（只有班距的路線例如台北 307 用 Frequencys）
+function subTimes(city, route, sub) {
+  const rows = SCHED[city + "|" + route]?.rows;
+  if (!rows) return "";
+  const wd = WEEK[new Date().getDay()];
+  const mine = rows.filter(x => sub.sub && x.SubRouteUID === sub.sub);
+  const use = mine.length ? mine : rows.filter(x => (x.Direction ?? 0) === sub.dir);
+  const times = [], heads = [];
+  for (const x of use) {
+    for (const t of x.Timetables || []) {
+      if ((t.ServiceDay || {})[wd] === 0) continue;
+      const s0 = (t.StopTimes || [])[0], v = s0 && (s0.DepartureTime || s0.ArrivalTime);
+      if (v) times.push(v.slice(0, 5));
+    }
+    for (const f of x.Frequencys || []) if ((f.ServiceDay || {})[wd] !== 0) heads.push(f);
+  }
+  times.sort();
+  if (heads.length) {
+    const lo = Math.min(...heads.map(f => f.MinHeadwayMins || 99)), hi = Math.max(...heads.map(f => f.MaxHeadwayMins || 0));
+    const st = heads.map(f => f.StartTime).sort()[0], en = heads.map(f => f.EndTime).sort().pop();
+    return `${st}～${en}・` + (lo === hi ? `約 ${lo} 分一班` : `約 ${lo}～${hi} 分一班`);
+  }
+  if (!times.length) return "";
+  const gap = times.length >= 3 ? Math.round((hmMin(times[times.length - 1]) - hmMin(times[0])) / (times.length - 1)) : 0;
+  return `首班 ${times[0]}・末班 ${times[times.length - 1]}・` + (gap && gap < 90 ? `平均約 ${gap} 分一班` : `一天 ${times.length} 班`);
+}
+
+async function refreshRoute() {
+  const cur = RT.cur;
+  if (!cur || !cur.subs?.length || cur.live) return;
+  cur.live = true;
+  try {
+    cur.eta = await tdx(busPath("EstimatedTimeOfArrival", cur.city) + "?" + routeQ(cur.route));
+    cur.t = new Date(); cur.err = "";
+    if (RT.cur === cur) renderRoute();   // 到站時間先顯示，公車位置晚一點補
+    try { cur.bus = await tdx(busPath("RealTimeNearStop", cur.city) + "?" + routeQ(cur.route)); } catch (e) { /* 留上一次的位置 */ }
+  } catch (e) { cur.err = e.message; }
+  cur.live = false;
+  if (RT.cur === cur) renderRoute();
+}
+
+// 一站的到站：同子路線優先、再同方向；都對不上只借「末班車已過」這類狀態（跟常用一樣）
+function stopEta(s, sub) {
+  const c = RT.cur.eta.filter(e => e.StopUID === s.uid)
+    .sort((a, b) => (a.EstimateTime == null) - (b.EstimateTime == null) || (a.EstimateTime || 0) - (b.EstimateTime || 0));
+  return etaOf((sub.sub && c.find(x => x.SubRouteUID === sub.sub)) || c.find(x => (x.Direction ?? 0) === sub.dir) ||
+    c.find(x => x.StopStatus && x.EstimateTime == null));
+}
+
+function renderRoute(scroll) {
+  const opts = Object.entries(CITIES).map(([n, c]) => `<option value="${c}" ${c === RT.city ? "selected" : ""}>${n}</option>`).join("");
+  let h = `<div class="card"><h3>🔍 查路線</h3><div class="trow"><select id="rt-city"><option value="">選縣市</option>${opts}</select>` +
+    `<input type="text" id="rt-q" placeholder="路線號碼，例如 2、紅3、綠幹線" value="${esc(RT.q)}" autocomplete="off"></div>`;
+  if (RT.busy) h += `<p class="muted">查路線清單中…</p>`;
+  if (RT.err) h += `<p class="muted">查不到：${esc(RT.err)}</p>`;
+  if (RT.names) {
+    const q = RT.q.trim().replace(/台/g, "臺");
+    const hit = q ? RT.names.filter(n => n.includes(q)).sort((a, b) => (b === q) - (a === q) || !b.startsWith(q) - !a.startsWith(q)) : [];
+    h += q ? (hit.length ? `<div class="chips">` + hit.slice(0, 40).map(n => `<button class="small" data-act="route" data-r="${esc(n)}">${esc(n)}</button>`).join("") +
+      `</div>` + (hit.length > 40 ? `<p class="muted small-t">還有 ${hit.length - 40} 條，打多一點字</p>` : "") : `<p class="muted">沒有「${esc(q)}」這條路線</p>`)
+      : `<p class="muted small-t">這個縣市有 ${RT.names.length} 條路線，打號碼找。</p>`;
+  }
+  h += `</div>`;
+  const cur = RT.cur;
+  if (cur) {
+    const cn = Object.keys(CITIES).find(n => CITIES[n] === cur.city) || cur.city;
+    h += `<div class="card"><h3>🚌 ${esc(cur.route)} <span class="sub">${esc(cn)}</span></h3>`;
+    if (cur.busy) h += `<p class="muted">查站牌中…</p>`;
+    if (cur.err) h += `<p class="muted">查不到：${esc(cur.err)}</p>`;
+    if (cur.subs?.length) {
+      const sub = cur.subs[cur.si];
+      if (cur.subs.length > 1) h += `<div class="chips">` + cur.subs.map((s, i) =>
+        `<button class="small ${i === cur.si ? "on" : ""}" data-act="sub" data-i="${i}">${esc(s.label)}</button>`).join("") + `</div>`;
+      const tm = subTimes(cur.city, cur.route, sub);
+      if (tm) h += `<p class="muted">🕒 ${esc(tm)}</p>`;
+      const buses = cur.bus.filter(b => (sub.sub && b.SubRouteUID ? b.SubRouteUID === sub.sub : (b.Direction ?? 0) === sub.dir));
+      h += `<div class="stops">` + sub.stops.map((s, i) => {
+        const e = cur.t ? stopEta(s, sub) : {s: "off", t: "…"};
+        const here = buses.filter(b => b.StopUID === s.uid).map(b => `🚌${esc(b.PlateNumb || "")}`).join(" ");
+        return `<div class="row stop${s.uid === cur.hl ? " hl" : ""}"><span class="eta ${e.s}">${esc(e.t)}</span>` +
+          `<span><span class="sn">${i + 1}</span> ${esc(s.name)}${here ? ` <span class="bus">${here}</span>` : ""}</span></div>`;
+      }).join("") + `</div>`;
+      h += `<p class="muted small-t">${cur.t ? cur.t.toLocaleTimeString("zh-TW", {hour12: false}) + " 更新・每 30 秒自動更新・🚌 是公車現在的位置" : "查到站中…"}</p>`;
+    }
+    h += `</div>`;
+  }
+  const keep = document.activeElement?.id === "rt-q" ? document.activeElement.selectionStart : null;
+  $("#pane-route").innerHTML = h;
+  if (keep != null) { const i = $("#rt-q"); i.focus(); i.setSelectionRange(keep, keep); }
+  if (scroll) $("#pane-route .stop.hl")?.scrollIntoView({block: "center"});
 }
 
 // ════════════ 畫面 ════════════
@@ -266,8 +430,8 @@ function favRow(f) {
   const e = LIVE.t ? favEta(f) : {s: "off", t: "…"};
   const nx = LIVE.t && e.m == null && !/下一班/.test(e.t) && schedNext(f);
   if (nx) e.t = (e.t === "暫無到站資料" || e.t === "沒有即時資料" ? "" : e.t + " ") + "下一班 " + nx;
-  return `<div class="row"><span class="eta ${e.s}">${esc(e.t)}</span><span><b>${esc(f.route)}</b> ${esc(f.name)}` +
-    (f.to ? `<br><span class="sub">往 ${esc(f.to)}</span>` : "") + `</span></div>`;
+  return `<button class="row full" data-act="froute" data-i="${DB.data.favs.indexOf(f)}"><span class="eta ${e.s}">${esc(e.t)}</span><span><b>${esc(f.route)}</b> ${esc(f.name)}` +
+    (f.to ? `<br><span class="sub">往 ${esc(f.to)}</span>` : "") + `</span></button>`;
 }
 
 function renderFav() {
@@ -315,6 +479,7 @@ function renderSet() {
 function render() {
   renderFav();
   renderNear();
+  renderRoute();
   renderSet();
 }
 
@@ -344,6 +509,7 @@ document.addEventListener("click", async ev => {
   if (tab) {
     document.body.dataset.tab = tab.dataset.tab;
     document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b === tab));
+    if (tab.dataset.tab === "route" && !RT.city && !RT.cur) pickCity(DB.data.city || DB.data.favs.find(f => f.city)?.city || "Tainan");
     return;
   }
   const b = ev.target.closest("[data-act]");
@@ -370,6 +536,16 @@ document.addEventListener("click", async ev => {
     const g = NEAR.groups?.[+b.dataset.g], bus = g?.buses[b.dataset.k];
     return bus && toggleFav(g, bus);
   }
+  if (act === "nroute") {
+    const g = NEAR.groups?.[+b.dataset.g], bus = g?.buses[b.dataset.k];
+    return bus && openRoute(bus.city, bus.route, bus.dir, bus.stop, bus.sub);
+  }
+  if (act === "froute") {
+    const f = DB.data.favs[+b.dataset.i];
+    return f && f.t === "bus" && f.city && openRoute(f.city, f.route, f.dir ?? 0, f.stop, f.sub);
+  }
+  if (act === "route") return openRoute(RT.city, b.dataset.r);
+  if (act === "sub") { RT.cur.si = +b.dataset.i; return renderRoute(); }
   if (act === "import") { toast("搬資料中…"); return window.BusBridge.importOld(); }
   if (act === "wipe") {
     if (!b.dataset.sure) { b.dataset.sure = "1"; b.textContent = "再按一次就清掉"; return; }
@@ -380,11 +556,18 @@ document.addEventListener("click", async ev => {
   }
 });
 
+document.addEventListener("change", ev => { if (ev.target.id === "rt-city" && ev.target.value) pickCity(ev.target.value); });
+document.addEventListener("input", ev => { if (ev.target.id === "rt-q") { RT.q = ev.target.value; renderRoute(); } });
+
 document.body.dataset.tab = "fav";
 $("#beta").hidden = !IS_BETA;
 render();
 refreshLive();
 // 每 30 秒自動更新（跟電腦版一樣）；App 在背景或不在常用頁就不查，省 TDX 額度
-setInterval(() => { if (!document.hidden && document.body.dataset.tab === "fav") refreshLive(); }, 30000);
+setInterval(() => {
+  if (document.hidden) return;
+  if (document.body.dataset.tab === "fav") refreshLive();
+  if (document.body.dataset.tab === "route") refreshRoute();
+}, 30000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshLive(); });
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
