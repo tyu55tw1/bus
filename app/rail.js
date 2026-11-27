@@ -292,8 +292,6 @@ function railFavRow(f) {
 
 // 常用點火車、捷運 → 火車分頁直接查
 async function openRailFav(f) {
-  document.body.dataset.tab = "rail";
-  document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === "rail"));
   const D = railSet();
   if (f.t === "metro") {
     D.metroOp = f.op; D.metroSt[f.op] = f.ids.join(","); save();

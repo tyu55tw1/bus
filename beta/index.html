@@ -3,36 +3,45 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#2f5fb3">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#0b7a63" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e1513" media="(prefers-color-scheme: dark)">
 <meta name="referrer" content="no-referrer">
 <title>公車</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="ui.css">
 <link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="phone.css">
 </head>
 <body>
-<!-- 公車手機版（2026-11-27 起）：程式放 GitHub Pages（公開），TDX 金鑰、常用站牌、家／公司只存在手機（localStorage） -->
-<div id="app">
-  <header class="top">
-    <h1 id="ttl">公車</h1>
-    <span id="beta" class="tag" hidden>測試版</span>
-  </header>
-  <main id="main">
-    <section id="pane-fav" class="pane"><div id="trip-box"></div><div id="ai-box"></div><div id="fav-list"></div><div id="remind-box"></div></section>
-    <section id="pane-near" class="pane"></section>
-    <section id="pane-route" class="pane"></section>
-    <section id="pane-rail" class="pane"></section>
-    <section id="pane-set" class="pane"></section>
-  </main>
-  <nav class="tabs">
-    <button data-tab="fav" class="on">⭐ 常用</button>
-    <button data-tab="near">📍 附近</button>
-    <button data-tab="route">🔍 路線</button>
-    <button data-tab="rail">🚆 火車</button>
-    <button data-tab="set">⚙️ 設定</button>
-  </nav>
+<!-- 公車手機版（2026-11-27 起）：程式放 GitHub Pages（公開），TDX 金鑰、常用站牌、家／公司只存在手機（localStorage）。
+     1.4（2026-11-28）起畫面照電腦版（公車-plain\web）：ui.js、ui.css、app.css 是從電腦版複製來的，手機版自己加的樣式在 phone.css -->
+<div class="app" id="app">
+  <div class="screen base">
+    <section class="pane" data-tab="fav" hidden>
+      <header class="top"><div class="grow"><div class="sub" id="greet"></div><h1>常用<span id="beta" class="tag sm" hidden>測試版</span></h1></div>
+        <button class="textbtn press" id="btn-edit">編輯</button>
+        <button class="iconbtn press" id="btn-set" aria-label="設定"></button></header>
+      <div class="scroll" id="fav-scroll"><div id="fav-body"></div></div>
+    </section>
+    <section class="pane" data-tab="near" hidden>
+      <header class="top"><div class="grow"><div class="sub" id="near-sub">300 公尺內的站牌</div><h1>附近</h1></div></header>
+      <div class="scroll" id="near-scroll"><div id="near-body"></div></div>
+    </section>
+    <section class="pane" data-tab="search" hidden>
+      <header class="top"><div class="grow"><h1>查路線</h1></div></header>
+      <div class="scroll" id="search-scroll"><div id="search-body"></div></div>
+    </section>
+    <section class="pane" data-tab="rail" hidden>
+      <header class="top"><div class="grow"><h1>火車</h1></div></header>
+      <div class="scroll" id="rail-scroll"><div id="pane-rail" class="legacy"></div></div>
+    </section>
+  </div>
 </div>
-<div id="toast" class="toast" hidden></div>
+<script src="ui.js"></script>
 <script src="rail.js"></script>
 <script src="trip.js"></script>
 <script src="ai.js"></script>

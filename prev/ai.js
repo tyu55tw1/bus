@@ -350,5 +350,22 @@ function aiSetCard() {
   return `<div class="card"><h3>🤖 Gemini 金鑰（問 AI 用）</h3><p class="muted">只存在這支手機，不會上傳。到 aistudio.google.com「Get API key」免費申請。` +
     `今天問了 ${u.day === dayIso(0) ? u.n : 0} 句（一天最多 ${AI_PER_DAY} 句）。</p>` +
     `<label>API 金鑰<input type="password" id="gem-key" autocomplete="off" value="${esc(DB.settings.gemKey)}"></label>` +
-    `<div class="btns"><button class="primary" data-act="savegem">存起來</button></div></div>`;
+    `<div class="btns"><button class="primary" data-act="savegem">存起來</button><button data-act="testgem">測試金鑰</button></div>` +
+    `<p class="muted" id="gem-test">測試金鑰不會用掉每天的問 AI 次數。</p></div>`;
+}
+/** 1.3（2026-11-28 使用者：「公車沒測試金鑰」）：只列模型清單，不叫 Gemini 回答，不吃免費次數（跟行事曆手機版一樣） */
+async function testGemKey() {
+  const key = $("#gem-key").value.trim(), out = $("#gem-test");
+  if (!key) { out.textContent = "先把金鑰貼進上面的格子。"; return; }
+  out.textContent = "測試中…";
+  try {
+    const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=1", {headers: {"x-goog-api-key": key}});
+    out.textContent = r.ok ? "✅ 金鑰可以用！記得按「存起來」。"
+      : r.status === 400 ? "❌ 金鑰不對：重新複製一次，前後不要多空白。"
+      : r.status === 403 ? "❌ 這把金鑰沒有開 Gemini 權限，或已經被停用：到 aistudio.google.com/apikey 換一把。"
+      : r.status === 429 ? "⏳ 金鑰是對的，但現在查太頻繁，等一下再試。"
+      : `❓ Gemini 回了 ${r.status}，等一下再試。`;
+  } catch (err) {
+    out.textContent = "📶 連不到 Gemini：看看有沒有網路。";
+  }
 }

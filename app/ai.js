@@ -220,12 +220,18 @@ async function gemini(contents, system) {
   if (!key) throw new Error("先到 ⚙️ 設定輸入 Gemini 金鑰，才能問 AI。");
   const body = JSON.stringify({systemInstruction: {parts: [{text: system}]}, contents, tools: [{functionDeclarations: AI_TOOLS}],
     generationConfig: {temperature: 0.2, maxOutputTokens: 700}});
-  let last = "";
+  let last = "", wait = 0;
   for (const m of AI_MODELS) {
     try {
       const r = await fetch(AI_API(m), {method: "POST", headers: {"x-goog-api-key": key, "Content-Type": "application/json"}, body});
       if (!r.ok) {
         last = "HTTP " + r.status;
+        // 1.4：429 要等幾秒（Retry-After 標頭，或回應裡的 RetryInfo.retryDelay「37s」），沒有就 60 秒 → 畫面倒數
+        if (r.status === 429) {
+          let s = +r.headers.get("Retry-After") || 0;
+          if (!s) try { s = Math.ceil(parseFloat(JSON.stringify(await r.json()).match(/"retryDelay":"([\d.]+)s"/)?.[1]) || 0); } catch (e) { /* 沒寫 */ }
+          wait = Math.max(wait, s || 60);
+        }
         if ([404, 429, 500, 503].includes(r.status)) continue;
         if (r.status === 400 || r.status === 403) throw new Error("Gemini 金鑰不對或沒開權限（到 ⚙️ 設定重新輸入）");
         break;
@@ -238,7 +244,8 @@ async function gemini(contents, system) {
       last = e.message;
     }
   }
-  throw new Error(/429/.test(last) ? "AI 免費額度暫時用完了（Google 那邊限流），等一下再問；路線一樣可以在「想去哪？」查。"
+  throw new Error(wait ? `AI 免費額度暫時用完了（${wait} 秒）`
+    : /429/.test(last) ? "AI 免費額度暫時用完了（Google 那邊限流），等一下再問；路線一樣可以在「想去哪？」查。"
     : "AI 現在連不上，等一下再問；路線一樣可以在「想去哪？」查。");
 }
 
@@ -254,6 +261,7 @@ function aiTake() {   // 一天最多問幾句（用使用者自己的免費額�
 async function aiAsk(text, show) {
   text = String(text || "").trim().slice(0, 300);
   if (!text || AI.busy) return;
+  AI.retry = null; delete WAITS.ai;   // 新問題：取消上一題的倒數
   AI.msgs.push({who: "me", text: show || text});
   if (!aiTake()) { AI.msgs.push({who: "ai", text: `今天已經問了 ${AI_PER_DAY} 句，明天再問；路線一樣可以在「想去哪？」查。`}); return renderAi(); }
   AI.busy = true; renderAi();
@@ -286,7 +294,10 @@ async function aiAsk(text, show) {
       reply = "";
     }
     reply = reply || AI_FALLBACK;
-  } catch (e) { reply = e.message; }
+  } catch (e) {
+    reply = e.message.replace(/（\d+ 秒）/, "");
+    if (busySecs(e)) { AI.retry = {text, show, err: e}; reply += "，倒數完會自動再問一次；路線一樣可以在「想去哪？」查。"; }
+  }
   if (keep[keep.length - 1].role !== "model") keep.push({role: "model", parts: [{text: reply}]});
   AI.hist = [...AI.hist, ...keep].slice(-40);
   while (AI.hist.length && !(AI.hist[0].role === "user" && AI.hist[0].parts.some(p => p.text))) AI.hist.shift();   // 開頭要是使用者說的話
@@ -328,6 +339,7 @@ function renderAi() {
       : `<button class="small" data-act="aibtn" data-j="${j}">${esc(b.t)}</button>`).join("") + `</div>`;
   });
   if (AI.busy) h += `<div class="msg ai muted">查詢中…</div>`;
+  else if (AI.retry) h += errBox("ai", AI.retry.err, () => { const r = AI.retry; AI.retry = null; if (r && AI.open) aiAsk(r.text, r.show); });   // 撞到上限倒數（app.js）
   h += `<div class="trow"><input type="text" id="ai-q" placeholder="想問什麼？" autocomplete="off" ${AI.busy ? "disabled" : ""}>` +
     `<button class="primary small" data-act="aisend" ${AI.busy ? "disabled" : ""}>送出</button></div>` +
     (AI.msgs.length ? `<button class="small" data-act="aiclear">清除對話</button>` : "") + `</div>`;
@@ -340,7 +352,7 @@ function aiBtn(j) {
   const b = AI.msgs[AI.msgs.length - 1]?.btns?.[j];
   if (!b) return;
   if (b.say) return aiAsk(b.say, b.show);
-  if (b.go) { tripGo(b.go); $("#trip-box")?.scrollIntoView({block: "start"}); }
+  if (b.go) { showPlan(); tripGo(b.go); }   // 1.4：想去哪在查路線分頁的「路線規劃」
 }
 
 // 設定頁的 Gemini 金鑰（app.js 的 renderSet 會插這張卡）
