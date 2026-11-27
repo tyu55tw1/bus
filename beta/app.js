@@ -2,7 +2,7 @@
 // 程式放 GitHub Pages（公開）；TDX 金鑰和常用資料只存在這支手機的 localStorage。
 // TDX 的資料 API 對瀏覽器預檢（OPTIONS）回 401、沒有 CORS 標頭，網頁不能自己查 → 由安卓外殼 BusBridge 代查（見 設計.md）。
 "use strict";
-const VERSION = "手機版 0.6";
+const VERSION = "手機版 0.7";
 const KEY = "busphone.v1";   // 同一個網域還有行事曆（calphone.v1）、之後的生活助手，名字別撞
 const IS_BETA = location.pathname.includes("/beta/");
 const KIND = {tra: "台鐵", thsr: "高鐵", metro: "捷運", bus: ""};   // 電腦版 favs 的 kind
@@ -83,6 +83,54 @@ function favEta(f) {
     c.find(x => x.StopStatus && x.EstimateTime == null));
 }
 
+// ════════════ 時刻表補「下一班 hh:mm」（電腦版 _fav_bus：即時資料沒有分鐘數時才用；每條路線快取 6 小時） ════════════
+const SCHED = {};   // 「縣市|路線」→ {t, rows}
+const WEEK = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const hmMin = s => +s.slice(0, 2) * 60 + +s.slice(3, 5);
+
+// 這個常用今天在這一站、晚於現在的第一班（只用時刻表裡有這一站的；子路線先比 sub 再比方向）
+function schedNext(f) {
+  const rows = SCHED[f.city + "|" + f.route]?.rows;
+  if (!rows) return null;
+  const now = new Date(), nowM = now.getHours() * 60 + now.getMinutes(), wd = WEEK[now.getDay()];
+  const subs = (f.sub && rows.filter(x => x.SubRouteUID === f.sub).length) ? rows.filter(x => x.SubRouteUID === f.sub)
+    : rows.filter(x => (x.Direction ?? 0) === (f.dir ?? 0));
+  // 台南等只有起點站發車時間：照電腦版 board_times，用「第幾站 × 2 分鐘」推估到這一站（標「約」）
+  const seq = ((f.sub && SCHED[f.city + "|" + f.route].stops?.find(x => x.SubRouteUID === f.sub)) ||
+    SCHED[f.city + "|" + f.route].stops?.find(x => (x.Direction ?? 0) === (f.dir ?? 0)))?.Stops || [];
+  const idx = seq.findIndex(s => s.StopUID === f.stop || (f.name && s.StopName?.Zh_tw === f.name));
+  const exact = [], firsts = [];
+  for (const x of subs) for (const t of x.Timetables || []) {
+    if ((t.ServiceDay || {})[wd] === 0) continue;
+    const sts = t.StopTimes || [];
+    const s = sts.find(s => s.StopUID === f.stop);
+    const v = s && (s.ArrivalTime || s.DepartureTime), v0 = sts[0] && (sts[0].DepartureTime || sts[0].ArrivalTime);
+    if (v) exact.push(hmMin(v)); else if (v0) firsts.push(hmMin(v0));
+  }
+  let times = exact, about = "";
+  if (exact.length < firsts.length) {
+    if (idx < 0) return null;   // 找不到這一站就不猜
+    times = firsts.map(t => t + idx * 2); about = idx ? "約 " : "";
+  }
+  const m = times.filter(t => t > nowM && t < 1440).sort((a, b) => a - b)[0];
+  return m == null ? null : about + String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
+}
+
+async function refreshSched(favs) {
+  for (const f of favs) {
+    const k = f.city + "|" + f.route;
+    if (SCHED[k] && Date.now() - SCHED[k].t < 6 * 3600e3) continue;
+    if (favEta(f).m != null) continue;   // 有即時分鐘數就不用查
+    try {
+      const q = `?$filter=RouteName/Zh_tw eq '${f.route}'&$format=JSON`, nap = () => new Promise(r => setTimeout(r, 1500));
+      await nap();   // 查太快 TDX 會回 429
+      const rows = await tdx(busPath("Schedule", f.city) + q);
+      await nap();
+      SCHED[k] = {t: Date.now(), rows, stops: await tdx(busPath("StopOfRoute", f.city) + q)};
+    } catch (e) { SCHED[k] = {t: Date.now() - 5.5 * 3600e3, rows: null}; }   // 失敗半小時後再試
+  }
+}
+
 async function refreshLive() {
   const favs = DB.data.favs.filter(f => f.t === "bus" && f.city && f.stop);
   if (!favs.length || LIVE.busy || !window.BusBridge || !DB.settings.tdxId) return;
@@ -103,6 +151,7 @@ async function refreshLive() {
   if (errs.length && !Object.keys(eta).length) LIVE.err = errs[0];   // 全部失敗就保留上一次的資料
   else { LIVE.eta = eta; LIVE.err = errs[0] || ""; LIVE.t = new Date(); }
   renderFav();
+  if (LIVE.t) { await refreshSched(favs); renderFav(); }
 }
 
 // ════════════ 附近（手機定位 → 300 公尺內的站牌 → 每站經過的公車幾分到；照電腦版 nearby_stops＋nearby_board） ════════════
@@ -215,6 +264,8 @@ function favRow(f) {
     return `<div class="row"><span>${esc(f.label || f.name)}</span><span class="d">${esc(KIND[f.kind] ?? "")}</span></div>`;
   }
   const e = LIVE.t ? favEta(f) : {s: "off", t: "…"};
+  const nx = LIVE.t && e.m == null && !/下一班/.test(e.t) && schedNext(f);
+  if (nx) e.t = (e.t === "暫無到站資料" || e.t === "沒有即時資料" ? "" : e.t + " ") + "下一班 " + nx;
   return `<div class="row"><span class="eta ${e.s}">${esc(e.t)}</span><span><b>${esc(f.route)}</b> ${esc(f.name)}` +
     (f.to ? `<br><span class="sub">往 ${esc(f.to)}</span>` : "") + `</span></div>`;
 }
