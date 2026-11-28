@@ -2,7 +2,7 @@
 // 程式放 GitHub Pages（公開）；TDX 金鑰和常用資料只存在這支手機的 localStorage。
 // TDX 的資料 API 對瀏覽器預檢（OPTIONS）回 401、沒有 CORS 標頭，網頁不能自己查 → 由安卓外殼 BusBridge 代查（見 設計.md）。
 "use strict";
-const VERSION = "手機版 1.6";
+const VERSION = "手機版 1.7";
 const KEY = "busphone.v1";   // 同一個網域還有行事曆（calphone.v1）、之後的生活助手，名字別撞
 const IS_BETA = location.pathname.includes("/beta/");
 const KIND = {tra: "台鐵", thsr: "高鐵", metro: "捷運", bus: ""};   // 電腦版 favs 的 kind
@@ -586,11 +586,11 @@ function favCard(f, i) {
         `<span class="eta ${m <= 5 ? "soon" : ""}"><span class="n num">${m >= 100 ? Math.floor(m / 60) + "<small>時</small>" : m + "<small>分</small>"}</span><div class="then">${esc(n.dep)} 開</div></span>`;
       dl = delayHtml(n.delay);
     } else if (x?.trains) { sub = "今天沒有車了"; eta = `<span class="eta off"><span class="n">明天再查</span></span>`; }
-    else { sub = x?.err ? "查不到：" + x.err.replace(/（\d+ 秒）/, "") : f.alias ? `${f.on} → ${f.dn}` : "查詢中…"; eta = etaHtml(x?.err ? {m: null, t: "暫無資料"} : null); }
+    else { sub = x?.err ? (busySecs(x.err) ? "查太頻繁，倒數完自動重查" : "查不到：" + x.err.replace(/（\d+ 秒）/, "")) : f.alias ? `${f.on} → ${f.dn}` : "查詢中…"; eta = etaHtml(x?.err ? {m: null, t: "暫無資料"} : null); }
   } else if (f.t === "metro") {
     const x = FAVX.get(f), r = x?.rows?.[0];
     b = `<span class="badge metro">捷運</span>`; who = f.alias || f.name;
-    sub = r ? x.rows.slice(0, 2).map(y => `${y.dest} ${y.t}`).join("・") : x?.err ? "查不到：" + x.err.replace(/（\d+ 秒）/, "") : x ? "目前沒有即時資料" : "查詢中…";
+    sub = r ? x.rows.slice(0, 2).map(y => `${y.dest} ${y.t}`).join("・") : x?.err ? (busySecs(x.err) ? "查太頻繁，倒數完自動重查" : "查不到：" + x.err.replace(/（\d+ 秒）/, "")) : x ? "目前沒有即時資料" : "查詢中…";
     eta = r && r.m != null ? (r.m === 0 ? `<span class="eta now"><span class="n">進站中</span></span>` :
       `<span class="eta ${r.m <= 3 ? "soon" : ""}"><span class="n num">${r.m}<small>分</small></span><div class="then">${esc(r.dest)}</div></span>`) : etaHtml(x ? {m: null, t: "暫無資料"} : null);
   } else if (f.t === "bike") {
@@ -650,6 +650,11 @@ function renderFav() {
   if (!window.BusBridge) note = `<div class="note">要在公車 App 裡才查得到到站時間。</div>`;
   else if (!DB.settings.tdxId) note = `<div class="note">先按右上齒輪輸入 TDX 金鑰，才查得到到站時間。</div>`;
   else if (LIVE.err) note = errBox("fav", LIVE.err, () => refreshLive());
+  else {   // 1.7（2026-11-28 使用者：台鐵那列只寫「查太頻繁」沒倒數）：常用裡火車／捷運撞到上限也顯示倒數
+    const busy = D.favs.map(f => FAVX.get(f)?.err).find(m => m && busySecs(m));
+    if (busy) note = errBox("fav", busy, () => refreshLive());
+    else delete WAITS.fav;
+  }
   body.innerHTML = whereHtml() + `<div id="hint-box">${hintHtml()}</div>
     <div class="label"><span>我的站牌</span><span id="fav-age">${LIVE.t ? UI.ago(LIVE.t.getTime()) : ""}</span></div>${note}
     <div class="list${LIVE.err ? " stale" : ""}" id="fav-list">${D.favs.map(favCard).join("")}</div>

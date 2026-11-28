@@ -2,7 +2,8 @@
 // 照電腦版 chat.py：用使用者自己的 Gemini 免費金鑰（設定頁輸入、只存這支手機；網頁直接呼叫 Google，有 CORS）。
 // AI 只能透過工具拿資料（trip.js 的找地點、路線規劃、計程車估算），回答裡的時間、分鐘、元這些數字逐一比對工具結果，
 // 對不上就叫 AI 重答一次，再對不上就改成「查不到確定的資料」（不讓 AI 自己編）。對話只在記憶體，關掉 App 就清掉。
-// 手機版先做 find_place、plan_trip、taxi_estimate、remember；公車到站、天氣、最晚一班、出門提醒之後再加。
+// 1.8（2026-11-28）加上 bus_arrival（公車到站）、weather（天氣，wttr.in 查不到改 Open-Meteo）、latest_trip（最晚一班）、parking（停車場）；
+// 出門提醒（set_reminder）使用者說先不做。
 "use strict";
 const AI_MODELS = ["gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.1-flash-lite"];   // 前面的忙線或下架就換下一個
 const AI_API = m => `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`;
@@ -20,8 +21,15 @@ const AI_TOOLS = [
     parameters: {type: "object", properties: {to: WHERE, from: WHERE,
       prefer: {type: "string", enum: ["fastest", "fewest_transfers", "least_walk"], description: "最快到／最少轉乘（不想轉車）／最少走路"},
       depart: {type: "string", description: "幾點出發 HH:MM（不給＝現在）"}}, required: ["to"]}},
+  {name: "latest_trip", description: "今天最晚還搭得到大眾運輸的走法（例如「回程最晚幾點」：from=目的地，to=HERE 或 HOME）。",
+    parameters: {type: "object", properties: {to: WHERE, from: WHERE}, required: ["to", "from"]}},
+  {name: "bus_arrival", description: "某條公車在附近站牌的即時到站（幾分鐘到、幾點到）和時刻表接下來幾班。例如「下一班 307 幾點」。",
+    parameters: {type: "object", properties: {route: {type: "string", description: "路線號碼，例如 307、紅1、0左"}, near: WHERE,
+      city: {type: "string", description: "縣市英文代碼（Taipei、NewTaipei、Taichung、Tainan、Kaohsiung…），使用者有說才給"}}, required: ["route"]}},
   {name: "taxi_estimate", description: "計程車估價（費用範圍、約幾分鐘、幾公里；都是估算）。",
     parameters: {type: "object", properties: {to: WHERE, from: WHERE}, required: ["to"]}},
+  {name: "parking", description: "某地點附近 1.5 公里內停車場剩幾格（開車去的時候）。", parameters: {type: "object", properties: {near: WHERE}, required: ["near"]}},
+  {name: "weather", description: "某地點現在的天氣、降雨機率、接下來幾小時、3 天（出門要不要帶傘）。", parameters: {type: "object", properties: {near: WHERE}}},
   {name: "remember", description: "記住使用者的家、公司或偏好（存在他的手機）。kind=home/work 要給 place；kind=pref 給 text（例如「不喜歡轉車」）；kind=forget_pref 刪掉一個偏好。",
     parameters: {type: "object", properties: {kind: {type: "string", enum: ["home", "work", "pref", "forget_pref"]}, place: WHERE, text: {type: "string"}}, required: ["kind"]}},
 ];
@@ -89,6 +97,18 @@ function taxiShort(o, d) {
   return {lo: t.lo, hi: t.hi, min: t.min, km: t.km, night: t.night, note: "估算"};
 }
 
+function tdxNeed(ctx) {   // 一句話最多查幾次即時資料（TDX 免費金鑰每分鐘只有幾次）
+  if (ctx.tdx >= AI_TDX) throw new Error("這一句已經查很多次即時資料了（TDX 免費金鑰每分鐘次數有限），先用前面查到的結果回答");
+  ctx.tdx++;
+}
+function planShort(p, now, no) {   // 給 AI 看的一個走法
+  const f = p.first, leave = f ? new Date(new Date(f.start).getTime() - p.before * 60e3) : new Date(p.start);
+  const r = {no, tags: p.tags, leave_at: hmOf(leave), leave_in_min: Math.floor((leave - now) / 60e3), arrive: hm(p.end),
+    ride: fmtMin(p.min), transfers: p.transfers, walk_min: p.walk, summary: p.summary};
+  if (f) r.first = {type: f.label, line: f.line, board_stop: f.from, board_at: hm(f.start), walk_to_stop_min: p.before};
+  return r;
+}
+
 async function tPlan(args, ctx) {
   const o = await aiWhere(args.from, ctx), d = await aiWhere(args.to, ctx);
   const now = new Date(), straight = meters(o.lat, o.lon, d.lat, d.lon);
@@ -104,8 +124,7 @@ async function tPlan(args, ctx) {
     when = t > when ? t : new Date(t.getTime() + 86400e3);
     out.depart = `${when.getMonth() + 1}/${when.getDate()} ${hmOf(when)}`;
   }
-  if (ctx.tdx >= AI_TDX) throw new Error("這一句已經查很多次即時資料了（TDX 免費金鑰每分鐘次數有限），先用前面查到的結果回答");
-  ctx.tdx++;
+  tdxNeed(ctx);
   let ps;
   try { ps = await plans(o, d, when); } catch (e) {
     if (/頻繁|429/.test(e.message)) { out.busy = true; out.plans = null; out.note = "即時資料來源忙線，請使用者 10 秒後再問一次"; return out; }
@@ -115,15 +134,7 @@ async function tPlan(args, ctx) {
     (/轉車|轉乘/.test((DB.data.aiPrefs || []).join("")) ? "最少轉乘" : /走路/.test((DB.data.aiPrefs || []).join("")) ? "最少走路" : "最快到");
   ps.sort((a, b) => !a.tags.includes(want) - !b.tags.includes(want));
   out.prefer = want;
-  out.plans = ps.map((p, i) => {
-    const k = p.legs.findIndex(l => l.kind !== "walk" && l.kind !== "wait"), f = p.legs[k];
-    const before = p.legs.slice(0, Math.max(k, 0)).filter(l => l.kind === "walk").reduce((a, l) => a + l.min, 0);
-    const leave = f ? new Date(new Date(f.start).getTime() - before * 60e3) : new Date(p.start);
-    const r = {no: i + 1, tags: p.tags, leave_at: hmOf(leave), leave_in_min: Math.floor((leave - now) / 60e3), arrive: hm(p.end),
-      ride: fmtMin(p.min), transfers: p.transfers, walk_min: p.walk, summary: p.summary};
-    if (f) r.first = {type: f.label, line: f.line, board_stop: f.from, board_at: hm(f.start), walk_to_stop_min: before};
-    return r;
-  });
+  out.plans = ps.map((p, i) => planShort(p, now, i + 1));
   if (out.plans.length && out.plans.every(p => p.leave_in_min < -1)) out.note = "查到的班次都剛開走了，請使用者點「看路線」重查";
   if (want === "最少轉乘" && out.plans[0]?.transfers > 0) out.note = `沒有不用轉車的走法，最少要轉 ${out.plans[0].transfers} 次`;
   if (!ps.length) {
@@ -131,6 +142,136 @@ async function tPlan(args, ctx) {
     out.note = (late ? "這個時間查不到大眾運輸走法（晚上可能已經收班；明天早上再查會有）" : "查不到到這裡的大眾運輸走法（目的地附近可能沒有公車或火車站）") + "，可以坐計程車（taxi 是估價）";
   }
   return out;
+}
+
+// 最晚一班（電腦版 t_latest_trip）：從 21:00（已經過了就從現在）查一次，有車就從最晚那班之後再查一次（TDX 一次只給最早的幾個）
+async function tLatest(args, ctx) {
+  const o = await aiWhere(args.from, ctx), d = await aiWhere(args.to, ctx), now = new Date();
+  if (meters(o.lat, o.lon, d.lat, d.lon) <= NO_TRANSIT) return {from: o.name, to: d.name, note: "很近，走路就到，不用趕車"};
+  tdxNeed(ctx);
+  const nine = new Date(now); nine.setHours(21, 0, 0, 0);
+  let dep = new Date(Math.max(now.getTime() + 60e3, nine.getTime()));
+  const endDay = new Date(now); endDay.setDate(endDay.getDate() + 1); endDay.setHours(3, 0, 0, 0);
+  let best = null;
+  const asked = [];
+  for (let i = 0; i < 2; i++) {
+    asked.push(hmOf(dep));
+    let rs;
+    try { rs = await plans(o, d, dep, true); } catch (e) {
+      if (/頻繁|429/.test(e.message)) return {busy: true, note: "即時資料來源忙線，請使用者 10 秒後再問一次"};
+      throw e;
+    }
+    rs = rs.filter(r => new Date(r.start) < endDay);
+    if (!rs.length) break;
+    const last = rs.reduce((a, r) => r.start > a.start ? r : a);
+    if (best && last.start <= best.start) break;
+    best = last;
+    dep = new Date(new Date(last.start).getTime() + 60e3);
+  }
+  const out = {from: o.name, to: d.name, now: hmOf(now), searched_from: asked[0], _o: o, _d: d};
+  if (!best) {
+    out.note = `${asked[0]} 以後查不到大眾運輸的走法（可能已經收班），可以考慮計程車`;
+    if (meters(o.lat, o.lon, d.lat, d.lon) <= 80000) out.taxi = taxiShort(o, d);
+    return out;
+  }
+  out.latest = planShort({...best, tags: ["查到最晚"]}, now, 1);
+  out.note = `這是從 ${asked[0]} 起查到最晚出發的走法；再晚可能就沒車了，建議提早一點`;
+  return out;
+}
+
+// 公車到站（電腦版 t_bus_arrival）：這條路線每個方向離地點最近的站牌，即時到站＋時刻表接下來幾班
+async function tBus(args, ctx) {
+  const route = String(args.route || "").replace(/\s+/g, "").slice(0, 12);
+  if (!route) throw new Error("沒有路線號碼");
+  const p = await aiWhere(args.near, ctx);
+  tdxNeed(ctx);
+  const codes = Object.values(CITIES);
+  const cities = [...new Set([codes.includes(args.city) ? args.city : "", await busCityAt(p.lat, p.lon), "InterCity"].filter(Boolean))];
+  let raw = null, city = "";
+  for (const c of cities) {
+    const r = await routeRaw(c, route);
+    if (r.stops.some(x => x.Stops?.length)) { raw = r; city = c; break; }
+  }
+  if (!raw) return {route, found: false, note: `${cities[0] === "InterCity" ? "這附近" : cityName(cities[0])}查不到 ${route} 這條公車（可能要說是哪個縣市）`};
+  const byDir = {};   // 每個方向：離地點最近的站牌
+  for (const r of raw.stops.filter(x => x.Stops?.length)) for (const s of r.Stops) {
+    const la = s.StopPosition?.PositionLat; if (!la) continue;
+    const dm = meters(p.lat, p.lon, la, s.StopPosition.PositionLon), k = r.Direction ?? 0;
+    if (!byDir[k] || dm < byDir[k].dm) byDir[k] = {dm, r, s};
+  }
+  const ds = Object.entries(byDir).sort((a, b) => a[0] - b[0]).map(x => x[1]);
+  if (!ds.length || Math.min(...ds.map(x => x.dm)) > 2000)
+    return {route, city: cityName(city), found: true, near: p.name, note: `${p.name}附近 2 公里內沒有 ${route} 的站牌`};
+  const uids = [...new Set(ds.map(x => x.s.StopUID))];
+  const etas = await tdx(`${busPath("EstimatedTimeOfArrival", city)}?$filter=${uids.map(u => `StopUID eq '${u}'`).join(" or ")}&$format=JSON`);
+  const now = new Date(), cur = now.getHours() * 60 + now.getMinutes();
+  const dirs = ds.map(({dm, r, s}) => {
+    const rn = nz(r.RouteName?.Zh_tw || route);
+    const c = etas.filter(e => e.StopUID === s.StopUID && nz(e.RouteName?.Zh_tw) === rn)
+      .sort((a, b) => (a.EstimateTime == null) - (b.EstimateTime == null) || (a.EstimateTime || 0) - (b.EstimateTime || 0));
+    const e = etaOf(c.find(x => x.SubRouteUID === r.SubRouteUID) || c.find(x => (x.Direction ?? 0) === (r.Direction ?? 0)));
+    const info = boardInfo(raw, {from: s.StopName?.Zh_tw || ""}, r) || {times: []};
+    const nxt = info.times.filter(t => hmMin(t) >= cur).slice(0, 3);
+    const row = {to: r.Stops[r.Stops.length - 1]?.StopName?.Zh_tw || "", stop: s.StopName?.Zh_tw || "", stop_dist_m: dm,
+      walk_min: Math.max(1, Math.round(dm * 1.25 / WALK_M_MIN)), live: e.m != null, status: e.t};
+    if (e.m != null) { row.eta_min = e.m; row.arrive_at = hmOf(new Date(now.getTime() + e.m * 60e3)); }
+    else { const nb = e.t.match(/\d\d:\d\d/); if (nb) row.next_bus_at = nb[0]; }
+    if (nxt.length) { row.timetable_next = nxt; row.timetable_is_estimate = !!info.approx; }
+    row._go = {city, route: r.RouteName?.Zh_tw || route, dir: r.Direction ?? 0, stop: s.StopUID, sub: r.SubRouteUID || ""};
+    return row;
+  });
+  return {route, city: cityName(city), near: p.name, now: hmOf(now), directions: dirs};
+}
+
+// 停車場（電腦版 t_parking）：trip.js 的 parkNear（TDX）
+async function tPark(args, ctx) {
+  const p = await aiWhere(args.near, ctx);
+  tdxNeed(ctx);
+  const j = await parkNear(p.lat, p.lon);
+  return {near: p.name, lots: j.rows.slice(0, 4).map(r => ({name: r.name, dist_m: r.dist, free: r.avail, total: r.total})), note: j.why || ""};
+}
+
+// 天氣（電腦版 t_weather 用生活助手的 wttr.in）：網頁直接查 wttr.in，查不到改 Open-Meteo（都不用金鑰、有 CORS）
+const WMO = {0: "晴", 1: "大致晴", 2: "多雲", 3: "陰", 45: "有霧", 48: "有霧", 51: "毛毛雨", 53: "毛毛雨", 55: "毛毛雨", 61: "小雨", 63: "中雨", 65: "大雨",
+  80: "陣雨", 81: "陣雨", 82: "大陣雨", 95: "雷雨", 96: "雷雨", 99: "雷雨"};
+const DAY3 = ["今天", "明天", "後天"];
+async function wxWttr(lat, lon) {
+  const r = await fetch(`https://wttr.in/${lat.toFixed(3)},${lon.toFixed(3)}?format=j1&lang=zh-tw`, {signal: AbortSignal.timeout(15000)});
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  const j = await r.json(), c = j.current_condition[0];
+  const zh = x => String(x["lang_zh-tw"]?.[0]?.value || x.weatherDesc?.[0]?.value || "").trim();
+  const now = new Date(), hours = [];
+  (j.weather || []).slice(0, 2).forEach((w, i) => (w.hourly || []).forEach(h => {
+    const t = new Date(now); t.setDate(t.getDate() + i); t.setHours(Math.floor(+h.time / 100), 0, 0, 0);
+    if (t > now) hours.push({time: hmOf(t), temp_c: +h.tempC, rain_pct: +h.chanceofrain, desc: zh(h)});
+  }));
+  return {now: {temp_c: +c.temp_C, feels_c: +c.FeelsLikeC, desc: zh(c), rain_pct: hours[0]?.rain_pct ?? null}, next_hours: hours.slice(0, 3),
+    days: (j.weather || []).slice(0, 3).map((w, i) => ({day: DAY3[i], hi_c: +w.maxtempC, lo_c: +w.mintempC,
+      rain_pct: Math.max(...(w.hourly || []).map(h => +h.chanceofrain || 0)), desc: zh((w.hourly || [])[4] || w.hourly?.[0] || {})})), src: "wttr.in"};
+}
+async function wxMeteo(lat, lon) {
+  const q = `latitude=${lat.toFixed(3)}&longitude=${lon.toFixed(3)}&current=temperature_2m,apparent_temperature,weather_code&hourly=temperature_2m,precipitation_probability,weather_code` +
+    `&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code&timezone=Asia%2FTaipei&forecast_days=3`;
+  const r = await fetch("https://api.open-meteo.com/v1/forecast?" + q, {signal: AbortSignal.timeout(15000)});
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  const j = await r.json(), H = j.hourly, now = isoMin(new Date()).slice(0, 13);
+  const i0 = Math.max(0, H.time.findIndex(t => t.slice(0, 13) > now));
+  const hours = [i0, i0 + 1, i0 + 2].filter(i => H.time[i]).map(i => ({time: H.time[i].slice(11, 16), temp_c: Math.round(H.temperature_2m[i]),
+    rain_pct: H.precipitation_probability[i], desc: WMO[H.weather_code[i]] || ""}));
+  return {now: {temp_c: Math.round(j.current.temperature_2m), feels_c: Math.round(j.current.apparent_temperature), desc: WMO[j.current.weather_code] || "",
+    rain_pct: hours[0]?.rain_pct ?? null}, next_hours: hours,
+    days: j.daily.time.map((t, i) => ({day: DAY3[i], hi_c: Math.round(j.daily.temperature_2m_max[i]), lo_c: Math.round(j.daily.temperature_2m_min[i]),
+      rain_pct: j.daily.precipitation_probability_max[i], desc: WMO[j.daily.weather_code[i]] || ""})), src: "Open-Meteo"};
+}
+async function tWeather(args, ctx) {
+  const p = await aiWhere(args.near, ctx);
+  let w;
+  try { w = await wxWttr(p.lat, p.lon); } catch (e) {
+    try { w = await wxMeteo(p.lat, p.lon); } catch (e2) { throw new Error("天氣資料讀不到（網路不通或天氣來源忙線），等一下再問"); }
+  }
+  const rain = Math.max(...w.next_hours.map(h => h.rain_pct || 0), w.days[0]?.rain_pct || 0);
+  w.advice = rain >= 50 ? "降雨機率高，建議帶傘" : rain >= 30 ? "可能會下雨，可以帶把折傘" : "降雨機率低，不太需要帶傘";
+  return {near: p.name, ...w};
 }
 
 async function tRemember(args, ctx) {
@@ -156,12 +297,17 @@ async function runTool(name, args, ctx) {
     if (name === "find_place") r = await aiFind(String(args.q || ""), args.near ? await aiWhere(args.near, ctx) : ctx.origin, ctx);
     else if (name === "plan_trip") r = await tPlan(args, ctx);
     else if (name === "taxi_estimate") { const o = await aiWhere(args.from, ctx), d = await aiWhere(args.to, ctx); r = {from: o.name, to: d.name, taxi: taxiShort(o, d), _o: o, _d: d}; }
+    else if (name === "latest_trip") r = await tLatest(args, ctx);
+    else if (name === "bus_arrival") r = await tBus(args, ctx);
+    else if (name === "parking") r = await tPark(args, ctx);
+    else if (name === "weather") r = await tWeather(args, ctx);
     else if (name === "remember") r = await tRemember(args, ctx);
     else r = {error: "沒有這個工具"};
     ctx.turn.push([name, r]);
     return r;
   } catch (e) {
     if (e instanceof AskUser) return e.out;
+    if (busySecs(e)) return {busy: true, error: "即時資料來源忙線，請使用者 10 秒後再問"};
     return {error: e.message};
   }
 }
@@ -198,19 +344,19 @@ function checkNumbers(reply, texts) {
 function aiSystem(ctx) {
   const n = new Date(), D = DB.data, prefs = D.aiPrefs || [];
   return [
-    "你是「公車 App」裡的交通小幫手，幫使用者查怎麼去、幾點出門、計程車大概多少。用繁體中文（台灣用語）回答，口氣親切、簡短：最多 4～5 行，不要 Markdown 標題、不要表格、不要用 ** 粗體。",
+    "你是「公車 App」裡的交通小幫手，幫使用者查怎麼去、公車幾分到、要不要帶傘。用繁體中文（台灣用語）回答，口氣親切、簡短：最多 4～5 行，不要 Markdown 標題、不要表格、不要用 ** 粗體。",
     `現在時間：${dayIso(0)}（星期${WEEK_ZH[n.getDay()]}）${hmOf(n)}。`,
     `出發點 HERE：${ctx.origin ? ctx.origin.name : "還不知道（定位沒開）"}。家 HOME：${D.home?.lat ? "已設定" : "還沒設定"}。公司 WORK：${D.work?.lat ? "已設定" : "還沒設定"}。`,
     `使用者的偏好：${prefs.length ? prefs.join("、") : "沒有"}。`,
     "規則（一定要遵守）：",
-    "1. 時間、幾分鐘、班次、票價、車資、路線號碼：只能用這次對話裡工具回傳的資料，原樣照抄。不可以自己估、自己加減、自己編。工具沒給就說「查不到」。",
-    "2. 問到交通、路線就一定先呼叫工具，不要憑記憶回答。",
+    "1. 時間、幾分鐘、班次、票價、車資、路線號碼、剩幾格、溫度、降雨機率：只能用這次對話裡工具回傳的資料，原樣照抄。不可以自己估、自己加減、自己編。工具沒給就說「查不到」。",
+    "2. 問到交通、路線、到站、天氣就一定先呼叫工具，不要憑記憶回答。",
     "3. 地點：用 find_place 找（或直接把地名放進 plan_trip 的 to）。回傳 ambiguous=true 時不要自己挑，簡短請使用者點畫面上的按鈕選。「最近的 X」有 best 就直接用 best。",
-    "4. 接著問的時候沿用前面的地點 id：「不想轉車呢？」→ plan_trip 同樣的 to、prefer=fewest_transfers；「少走路」→ prefer=least_walk。",
+    "4. 接著問的時候沿用前面的地點 id：「不想轉車呢？」→ plan_trip 同樣的 to、prefer=fewest_transfers；「少走路」→ prefer=least_walk；「回程最晚幾點？」→ latest_trip（from=剛剛的目的地 id，to=HERE）。",
     "5. 規劃結果先講第一個走法（plans[0]，已經照偏好排好）：搭什麼、幾點出門（leave_at，或「再 leave_in_min 分鐘出門」）、幾點到（arrive）；其他走法一句帶過。leave_in_min 小於 0 就說這班趕不上、請他看下一班。",
     "6. plans 是空的、或很遠沒有大眾運輸：說計程車估價（taxi 的 lo～hi 元、約 min 分鐘），講明是估算。busy=true 是資料來源忙線，請他 10 秒後再問一次。",
     "7. 不要講座標、id、英文欄位名。畫面會自動附上「看路線」「Google 地圖」等按鈕，可以說「點下面的按鈕」。",
-    "8. 跟交通、出門無關的問題：禮貌一句帶過（不要回答內容），再問他想去哪裡。公車幾分到、天氣這些手機版還不能問，請他用常用、附近、路線分頁看。",
+    "8. 跟交通、出門、天氣無關的問題：禮貌一句帶過（不要回答內容），再問他想去哪裡或要查哪班車。使用者要你「提醒我出門」：說手機版還沒有出門提醒，請他看「再幾分鐘出門」自己抓時間。",
     "9. 使用者說「記住我家在…」「我不喜歡轉車」這類話就用 remember。",
   ].join("\n");
 }
@@ -309,7 +455,12 @@ async function aiAsk(text, show) {
 function aiButtons(ctx) {
   const out = [];
   const ask = [...ctx.turn].reverse().find(([n, r]) => n === "find_place" && r.ambiguous)?.[1];
-  const plan = [...ctx.turn].reverse().find(([n, r]) => (n === "plan_trip" || n === "taxi_estimate") && r._d)?.[1];
+  const plan = [...ctx.turn].reverse().find(([n, r]) => (n === "plan_trip" || n === "taxi_estimate" || n === "latest_trip") && r._d)?.[1];
+  const bus = [...ctx.turn].reverse().find(([n, r]) => n === "bus_arrival" && r.directions?.length)?.[1];
+  if (bus && !plan) {   // 公車到站：每個方向一個「看路線」（查路線分頁，標出那一站）
+    for (const d of bus.directions.slice(0, 2)) out.push({t: `🚌 ${d._go.route} 往 ${d.to}`.slice(0, 20), route: d._go});
+    return out;
+  }
   if (ask && !plan) {
     for (const p of ask.places.slice(0, 5))
       out.push({t: p.name + (p.dist_m != null ? `・${p.dist_m >= 1000 ? (p.dist_m / 1000).toFixed(1) + " 公里" : p.dist_m + " 公尺"}` : "") +
@@ -326,7 +477,7 @@ function aiButtons(ctx) {
 }
 
 // 1.4：畫面照電腦版 openChat（對話泡泡＋底部輸入列，app.js 的 openAi 推進頁）
-const AI_SUGG = ["明天早上 8 點要到成大醫院，幾點出門？", "去最近的家樂福", "回家怎麼搭最快？", "記住我不喜歡轉車"];
+const AI_SUGG = ["明天早上 8 點要到成大醫院，幾點出門？", "去最近的家樂福", "下一班 紅3 幾點", "明天會下雨嗎？", "回家最晚幾點？", "記住我不喜歡轉車"];
 function renderAi() {
   const box = $("#ai-box");
   if (!box) return;
@@ -356,6 +507,7 @@ function aiBtn(j) {
   if (!b) return;
   if (b.say) return aiAsk(b.say, b.show);
   if (b.go) { showPlan(); tripGo(b.go); }   // 1.4：想去哪在查路線分頁的「路線規劃」
+  if (b.route) openRoute(b.route.city, b.route.route, b.route.dir, b.route.stop, b.route.sub, "問 AI");
 }
 
 // 設定頁的 Gemini 金鑰（app.js 的 renderSet 會插這張卡）

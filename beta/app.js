@@ -2,7 +2,7 @@
 // 程式放 GitHub Pages（公開）；TDX 金鑰和常用資料只存在這支手機的 localStorage。
 // TDX 的資料 API 對瀏覽器預檢（OPTIONS）回 401、沒有 CORS 標頭，網頁不能自己查 → 由安卓外殼 BusBridge 代查（見 設計.md）。
 "use strict";
-const VERSION = "手機版 1.7";
+const VERSION = "手機版 1.8";
 const KEY = "busphone.v1";   // 同一個網域還有行事曆（calphone.v1）、之後的生活助手，名字別撞
 const IS_BETA = location.pathname.includes("/beta/");
 const KIND = {tra: "台鐵", thsr: "高鐵", metro: "捷運", bus: ""};   // 電腦版 favs 的 kind
@@ -942,6 +942,7 @@ document.addEventListener("click", async ev => {
   if (act === "tplace") { const p = DB.data.places[+b.dataset.i]; return p && tripGo({name: p.name, addr: p.addr || "", lat: +p.lat, lon: +p.lon}); }
   if (act === "tpick") { const p = TRIP.cands?.[+b.dataset.i]; return p && tripGo(p); }
   if (act === "tsave") return savePlace();
+  if (act === "tpark") return loadPark();
   // 火車（rail.js）
   if (act === "rmode") return railMode(b.dataset.m);
   if (act === "rswap") { const r = railSet().rail[RAIL.mode]; [r.o, r.d] = [r.d, r.o]; save(); return renderRail(); }
